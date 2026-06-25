@@ -1,0 +1,8 @@
+FROM mythril/myth:latest
+
+WORKDIR /audit
+
+# Same isolation pattern as Slither:
+# --network=none enforced by orchestrator at docker run time
+# contracts at /audit/contracts (read-only bind mount)
+ENTRYPOINT ["myth"]

@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "sr-agent"
+version = "0.1.0"
+description = "Memory-injection-resistant smart contract audit agent"
+requires-python = ">=3.11"
+dependencies = [
+    # LLM APIs
+    "anthropic>=0.40.0",
+    # Blockchain
+    "web3>=7.0.0",
+    # Data validation — Pydantic v2 required (v1 has no model_rebuild)
+    "pydantic>=2.7.0",
+    # CLI
+    "click>=8.1.0",
+    "rich>=13.7.0",
+    # Docker SDK — sandbox containers
+    "docker>=7.0.0",
+    # HMAC + key material
+    "cryptography>=42.0.0",
+    # Observability
+    "langfuse>=2.0.0",
+    # HTTP (web3 + alchemy)
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.4.0",
+]
+
+[project.scripts]
+sr-agent = "sr_agent.cli:cli"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
