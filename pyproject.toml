@@ -6,6 +6,7 @@ build-backend = "setuptools.backends.legacy:build"
 name = "sr-agent"
 version = "0.1.0"
 description = "Memory-injection-resistant smart contract audit agent"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     # LLM APIs
