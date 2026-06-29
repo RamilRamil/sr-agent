@@ -181,3 +181,41 @@ def memory_cmd(subcommand: str, project_id: str, target: str | None) -> None:
         records = mem.load(project_id, target)
         for r in records:
             click.echo(r.model_dump_json(indent=2))
+
+
+@cli.command("confirm")
+@click.argument("confirmation_id")
+@click.option("--approve", is_flag=True, help="Approve the pending irreversible action")
+@click.option("--reject", is_flag=True, help="Reject the pending irreversible action")
+@click.option("--show", is_flag=True, help="Show the pending action details")
+def confirm_cmd(confirmation_id: str, approve: bool, reject: bool, show: bool) -> None:
+    """Approve, reject, or inspect a pending out-of-band confirmation.
+
+    This is the out-of-band channel: it runs as a separate process from the
+    agent loop, so the agent can never approve its own irreversible actions.
+    """
+    import json
+    from sr_agent.orchestrator.confirmation import load_request, resolve_confirmation
+
+    confirmations_dir = config.confirmations_root
+
+    if show:
+        try:
+            req = load_request(confirmation_id, confirmations_dir)
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(2)
+        click.echo(json.dumps(req, indent=2))
+        return
+
+    if approve == reject:  # both flags or neither
+        click.echo("Specify exactly one of --approve / --reject (or --show).", err=True)
+        sys.exit(2)
+
+    try:
+        status = resolve_confirmation(confirmation_id, confirmations_dir, approve=approve)
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(2)
+
+    click.echo(f"Confirmation {confirmation_id}: {status.value}")
