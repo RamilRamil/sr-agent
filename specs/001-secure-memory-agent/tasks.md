@@ -144,9 +144,9 @@
 
 ### Implementation
 
-- [ ] T046 [US5] Add unit tests in `tests/unit/test_memory_integrity.py` — `test_tampered_content_dropped`: modify `content` field in JSONL → load() returns empty; `test_tampered_hmac_dropped`: corrupt HMAC field → dropped; `test_missing_hmac_dropped`: remove HMAC → dropped; `test_valid_record_passes`: valid HMAC → record returned (SC-004)
-- [ ] T047 [US5] Add integration test in `tests/integration/test_store_tamper.py` — `test_direct_store_injection`: write record to JSONL without going through `episodic.write()` (no valid HMAC) → `load()` drops it; `test_partial_corruption`: corrupt 2 of 5 records → 3 valid returned, 2 silently dropped, no exception
-- [ ] T048 [US5] Implement `sr-agent memory verify` sub-command in `sr_agent/cli.py` — loads all records for project_id, reports count of valid/invalid/total; exits 1 if any invalid records found
+- [X] T046 [US5] Add unit tests in `tests/unit/test_memory_integrity.py` — `test_tampered_content_dropped`: modify `content` field in JSONL → load() returns empty; `test_tampered_hmac_dropped`: corrupt HMAC field → dropped; `test_missing_hmac_dropped`: remove HMAC → dropped; `test_valid_record_passes`: valid HMAC → record returned (SC-004)
+- [X] T047 [US5] Add integration test in `tests/integration/test_store_tamper.py` — `test_direct_store_injection`: write record to JSONL without going through `episodic.write()` (no valid HMAC) → `load()` drops it; `test_partial_corruption`: corrupt 2 of 5 records → 3 valid returned, 2 silently dropped, no exception
+- [X] T048 [US5] Implement `sr-agent memory verify` sub-command in `sr_agent/cli.py` — loads all records for project_id, reports count of valid/invalid/total; exits 1 if any invalid records found
 
 **Checkpoint**: SC-004 (100% invalid-signature records rejected) verified by tests.
 

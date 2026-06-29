@@ -177,7 +177,17 @@ def memory_cmd(subcommand: str, project_id: str, target: str | None) -> None:
         for f in root.glob("*.jsonl"):
             click.echo(f.stem)
 
-    elif subcommand in ("show", "verify") and target:
+    elif subcommand == "verify":
+        report = mem.verify_integrity(project_id)
+        for target_stem, (t_total, t_valid, t_invalid) in sorted(report.per_target.items()):
+            marker = "OK" if t_invalid == 0 else f"{t_invalid} INVALID"
+            click.echo(f"  {target_stem}: {t_valid}/{t_total} valid  [{marker}]")
+        click.echo(
+            f"Total: {report.valid}/{report.total} valid, {report.invalid} invalid"
+        )
+        sys.exit(1 if report.has_invalid else 0)
+
+    elif subcommand == "show" and target:
         records = mem.load(project_id, target)
         for r in records:
             click.echo(r.model_dump_json(indent=2))
