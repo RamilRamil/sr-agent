@@ -105,9 +105,9 @@
 
 ### Implementation
 
-- [ ] T037 [US3] Extend `sr_agent/memory/episodic.py` — enforce `principal.project_id` matches record `project_id` in both `write()` and `load()`; raise `PrincipalMismatch` if violated; add `load_for_principal(principal) -> list[MemoryRecord]` that enforces scoping at directory level before HMAC check
-- [ ] T038 [US3] Extend `sr_agent/orchestrator/loop.py` — bind `Principal` to session at creation; pass `project_id` to all `episodic.load()` calls; never cross-load from another project_id
-- [ ] T039 [US3] Add integration test in `tests/integration/test_principal_isolation.py` — `test_injection_in_A_does_not_affect_B`: inject malicious record into `memory/project-A/`, run agent for `project-B`, assert B's context never contained A's records; `test_B_memory_only_returns_B_records`: load for principal B returns only B's project_id records (FR-012, FR-013)
+- [X] T037 [US3] Extend `sr_agent/memory/episodic.py` — enforce `principal.project_id` matches record `project_id` in both `write()` and `load()`; raise `PrincipalMismatch` if violated; add `load_for_principal(principal) -> list[MemoryRecord]` that enforces scoping at directory level before HMAC check
+- [X] T038 [US3] Extend `sr_agent/orchestrator/loop.py` — bind `Principal` to session at creation; pass `project_id` to all `episodic.load()` calls; never cross-load from another project_id
+- [X] T039 [US3] Add integration test in `tests/integration/test_principal_isolation.py` — `test_injection_in_A_does_not_affect_B`: inject malicious record into `memory/project-A/`, run agent for `project-B`, assert B's context never contained A's records; `test_B_memory_only_returns_B_records`: load for principal B returns only B's project_id records (FR-012, FR-013)
 
 **Checkpoint**: SC-005 (100% isolation test passes).
 
