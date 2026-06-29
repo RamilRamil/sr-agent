@@ -160,7 +160,7 @@
 
 ### Static Analysis Tools
 
-- [ ] T049 [P] Create `sr_agent/tools/readonly.py` — implement `read_file(path)`, `search_code(pattern, scope, file_ext)` using stdlib; stub placeholder implementations for Slither/Mythril (wired to DockerSandbox)
+- [X] T049 [P] Create `sr_agent/tools/readonly.py` — `read_file(path, audit_root)` (containment + size guard) and `search_code(pattern, root, file_ext)` (substring, ReDoS-safe) on stdlib; wired live into `loop._dispatch` (read path no longer stub); Slither/Mythril fall through to generic stub until T050/T051. Example contract examples/vulnerable-vault/Vault.sol + 10 unit tests
 - [ ] T050 [P] Wire `run_slither(target, detectors)` in `sr_agent/tools/readonly.py` — calls `DockerSandbox.run("slither-sandbox", ...)` with `detectors` from `SlitherDetector` enum; parses Slither JSON output into `list[SlitherFinding]`
 - [ ] T051 [P] Wire `run_mythril(target, timeout, max_depth)` in `sr_agent/tools/readonly.py` — same DockerSandbox pattern; parses Mythril output
 - [ ] T052 Create `sr_agent/guardrails/mock_detect.py` — `check_test_realism(test_code: str) -> TestQuality`: scans for `MOCK_PATTERNS` list (7 patterns from research.md); returns `FindingStatus.MOCK_REVIEW` + flags if any found; pure string matching, no LLM
