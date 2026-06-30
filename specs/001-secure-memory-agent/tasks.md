@@ -184,7 +184,7 @@
 
 ### Stages (amended for relay)
 
-- [ ] T054 Create `sr_agent/planner/stage1.py` — `run_stage1(session) -> Stage1Report`: **deterministic SIG-based planning** (build_sig → find_red_flag_functions → SIG-prioritized targets), no LLM ReAct loop (relay decision); outputs `Stage1Report` with `analyzed`, `not_analyzed`, `targets`, `red_flags`. A relay request is emitted only if a discovery judgment genuinely needs the model.
+- [X] T054 Create `sr_agent/planner/stage1.py` — `run_stage1(session) -> Stage1Report`: **deterministic SIG-based planning** (build_sig → find_red_flag_functions → SIG-prioritized targets), no LLM ReAct loop (relay decision); outputs `Stage1Report` with `analyzed`, `not_analyzed`, `targets`, `red_flags`. A relay request is emitted only if a discovery judgment genuinely needs the model.
 - [X] T055 Create `sr_agent/planner/stage2.py` — `run_stage2(session, targets, provider) -> list[Finding]`: deterministic for-loop over Stage 1 targets; **per target emits a relay request via RelayBridge (Claude now / Codex later) instead of local Qwen3-4B**; ingested findings validated + sanitized + written to Episodic Memory as `external_llm_output`; checkpoint after each target; requests are batch-emitted then `resume`d (Fork 2)
 - [ ] T056 Create `sr_agent/planner/stage3.py` — `run_stage3(session, findings, sig, llm_client) -> list[Finding]`: SIG-filtered combination candidates; extended thinking on Claude Opus for each pair; non-transitivity check for trios of Critical findings; updates finding `combined_with` field
 
