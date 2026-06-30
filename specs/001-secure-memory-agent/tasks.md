@@ -178,14 +178,14 @@
 - [X] RLY1 Create `sr_agent/orchestrator/relay.py` — `request_analysis(target, context, relay_dir) -> RelayRequest` writes `relay/requests/{id}.md` (wrapped context + Finding JSON schema + paste instructions); `ingest_response(id, relay_dir) -> list[Finding]` reads `relay/responses/{id}.json`, extracts fenced JSON, validates each `Finding`, sanitizes notes, returns with `source_type=external_llm_output`; malformed/missing → re-request (fail-safe). Mirrors `confirmation.py`.
 - [X] RLY2 Fenced-JSON adapter (in relay.py) — tolerant extraction of the JSON block from free-form Claude text; strict `Finding` validation; surrounding prose ignored.
 - [X] RLY3 Extend `sr_agent/cli.py` — `sr-agent relay --show <id>` (print prompt to copy) / `--respond <id> <file>` (ingest response) / `--list` (pending requests).
-- [ ] RLY4 Checkpoint-resume — `sr-agent resume`: Stage 2 emits all relay requests, checkpoints, exits cleanly; resume ingests responses and continues (batch-friendly). Reuses `orchestrator/checkpoint.py`.
+- [X] RLY4 Checkpoint-resume — `sr-agent resume`: Stage 2 emits all relay requests, checkpoints, exits cleanly; resume ingests responses and continues (batch-friendly). Reuses `orchestrator/checkpoint.py`.
 - [ ] RLY5 `ReasoningProvider` interface + `ModelRouter` — route Stage 2 `TaskType` to `RelayBridge` (CodexClient later); single `complete()`-shaped contract so the loop is backend-agnostic.
 - [X] RLY6 Tests `tests/integration/test_relay.py` — fixtures of sample Claude responses: request created; response ingested → `Finding` with `external_llm_output` provenance; malformed → re-request; **relay ≠ authoring** (a relayed `verified_safe` is still blocked by the status gate).
 
 ### Stages (amended for relay)
 
 - [ ] T054 Create `sr_agent/planner/stage1.py` — `run_stage1(session) -> Stage1Report`: **deterministic SIG-based planning** (build_sig → find_red_flag_functions → SIG-prioritized targets), no LLM ReAct loop (relay decision); outputs `Stage1Report` with `analyzed`, `not_analyzed`, `targets`, `red_flags`. A relay request is emitted only if a discovery judgment genuinely needs the model.
-- [ ] T055 Create `sr_agent/planner/stage2.py` — `run_stage2(session, targets, provider) -> list[Finding]`: deterministic for-loop over Stage 1 targets; **per target emits a relay request via RelayBridge (Claude now / Codex later) instead of local Qwen3-4B**; ingested findings validated + sanitized + written to Episodic Memory as `external_llm_output`; checkpoint after each target; requests are batch-emitted then `resume`d (Fork 2)
+- [X] T055 Create `sr_agent/planner/stage2.py` — `run_stage2(session, targets, provider) -> list[Finding]`: deterministic for-loop over Stage 1 targets; **per target emits a relay request via RelayBridge (Claude now / Codex later) instead of local Qwen3-4B**; ingested findings validated + sanitized + written to Episodic Memory as `external_llm_output`; checkpoint after each target; requests are batch-emitted then `resume`d (Fork 2)
 - [ ] T056 Create `sr_agent/planner/stage3.py` — `run_stage3(session, findings, sig, llm_client) -> list[Finding]`: SIG-filtered combination candidates; extended thinking on Claude Opus for each pair; non-transitivity check for trios of Critical findings; updates finding `combined_with` field
 
 ### Local LLM + Knowledge Base
