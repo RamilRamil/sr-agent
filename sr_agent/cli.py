@@ -89,7 +89,7 @@ def audit(
 
     result = start_audit(
         audit_input, audit_path, memory, relay_dir, runs_dir,
-        output=output, progress=ProgressStream(),
+        output=output, progress=ProgressStream(), stage2_provider="auto",
     )
 
     if result.status == "paused":

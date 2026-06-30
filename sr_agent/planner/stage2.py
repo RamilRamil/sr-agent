@@ -139,3 +139,49 @@ def run_stage2(
         requested=requested,
         ingested=ingested_count,
     )
+
+
+def run_stage2_local(
+    session: AuditSession,
+    targets: list[str],
+    memory: EpisodicMemory,
+    client,
+    context_provider: ContextProvider,
+) -> Stage2Result:
+    """Synchronous Stage 2 via a local model (Ollama) — no relay, no pause.
+
+    Each target is analyzed in one shot; findings are written to memory as
+    external_llm_output (automation != authoring). A target whose model call
+    fails is skipped, not fatal.
+    """
+    from sr_agent.llm_core.local_client import ModelUnavailableError, analyze_target
+
+    findings: list[Finding] = []
+    analyzed = 0
+    for target in targets:
+        try:
+            result = analyze_target(client, target, context_provider(target))
+        except ModelUnavailableError as e:
+            logger.warning("Local Stage 2 skipped %s: %s", target, e)
+            continue
+        analyzed += 1
+        for relay_finding in result.findings:
+            payload = relay_finding.finding.model_dump()
+            payload["notes"] = relay_finding.notes
+            payload["notes_flags"] = relay_finding.notes_flags
+            memory.write(
+                MemoryRecord(
+                    project_id=session.principal.project_id,
+                    target=target,
+                    source_type=SourceType.external_llm_output,
+                    tool=None,
+                    session_id=session.session_id,
+                    finding=payload,
+                ),
+                principal=session.principal,
+            )
+            findings.append(relay_finding.finding)
+            session.finding_ids.append(relay_finding.finding.finding_id)
+
+    logger.info("Stage 2 (local) done: analyzed=%d findings=%d", analyzed, len(findings))
+    return Stage2Result(status="done", findings=findings, requested=analyzed, ingested=analyzed)

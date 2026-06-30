@@ -179,7 +179,7 @@
 - [X] RLY2 Fenced-JSON adapter (in relay.py) — tolerant extraction of the JSON block from free-form Claude text; strict `Finding` validation; surrounding prose ignored.
 - [X] RLY3 Extend `sr_agent/cli.py` — `sr-agent relay --show <id>` (print prompt to copy) / `--respond <id> <file>` (ingest response) / `--list` (pending requests).
 - [X] RLY4 Checkpoint-resume — `sr-agent resume`: Stage 2 emits all relay requests, checkpoints, exits cleanly; resume ingests responses and continues (batch-friendly). Reuses `orchestrator/checkpoint.py`.
-- [ ] RLY5 `ReasoningProvider` interface + `ModelRouter` — route Stage 2 `TaskType` to `RelayBridge` (CodexClient later); single `complete()`-shaped contract so the loop is backend-agnostic.
+- [X] RLY5 Stage 2 provider routing — start_audit(stage2_provider=relay|local|auto) selects RelayBridge (manual, pause/resume) or LocalClient (Ollama, synchronous); CodexClient slots in the same way. adapt_findings is the shared parse contract
 - [X] RLY6 Tests `tests/integration/test_relay.py` — fixtures of sample Claude responses: request created; response ingested → `Finding` with `external_llm_output` provenance; malformed → re-request; **relay ≠ authoring** (a relayed `verified_safe` is still blocked by the status gate).
 
 ### Stages (amended for relay)
@@ -190,7 +190,7 @@
 
 ### Local LLM + Knowledge Base
 
-- [ ] T057 [DEFERRED — relay decision] Create `sr_agent/llm_core/local_client.py` (Ollama) — superseded for now by RelayBridge (RLY1/RLY5); keep for a future local/Codex backend behind the same `ReasoningProvider` interface
+- [X] T057 Create `sr_agent/llm_core/local_client.py` — LocalClient calls Ollama (/api/generate) via stdlib urllib; analyze_target parses output through the SHARED relay adapter (adapt_findings) so a local model and Claude produce findings identically (external_llm_output). run_stage2_local runs synchronously (no pause). ModelUnavailableError on unreachable Ollama; per-target skip on failure
 - [ ] T058 [SUPERSEDED BY RELAY] `file_bridge.py` reader — folded into Phase 8A `relay.py` `ingest_response` (RLY1): reads `relay/responses/{id}.json`, `source_type=external_llm_output`. Cryptographic tamper-check N/A under manual relay (the human transport is the trust boundary); schema validation + all guardrails still apply
 - [ ] T059 Create `sr_agent/memory/knowledge.py` — `KnowledgeBase.search(query, category, top_k) -> list[KnowledgeChunk]`: query-expansion via `qmd-17B` local call, embedding via `gemma-300M`, reranker via `qwen-reranker-0.6b`; reads from `knowledge/` directory tree
 
