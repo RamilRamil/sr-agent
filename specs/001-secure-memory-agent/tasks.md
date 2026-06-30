@@ -207,7 +207,7 @@
 
 - [X] T063 Wire stages in `sr_agent/orchestrator/pipeline.py` (relay variant — pipeline.py, not loop.py): `start_audit` runs Stage 1 → emits Stage 2 relay requests → persists run state → PAUSE; `resume_audit` ingests responses → report. Stage 3 + ProgressStream deferred (Stage 3 largely deterministic via severity conjunction; slots before _finish)
 - [X] T064 Complete `sr_agent/cli.py` — `audit` runs the relay pipeline and prints resume instructions on pause; new `resume <session_id>` command ingests and writes the report. Address-based audit deferred (relay needs local files); `--no-stage3` n/a until Stage 3 wired
-- [ ] T065 Add integration test in `tests/integration/test_full_audit.py` — `test_audit_on_example_contract`: run Stage 1→2 on `examples/vulnerable-vault/` (included in repo); assert at least one HIGH finding detected and wrapped correctly; assert report generated with Coverage section
+- [X] T065 Add integration test in `tests/integration/test_full_audit.py` — `test_audit_on_example_contract`: run Stage 1→2 on `examples/vulnerable-vault/` (included in repo); assert at least one HIGH finding detected and wrapped correctly; assert report generated with Coverage section
 
 **Checkpoint**: Full `sr-agent audit ./contracts/` pipeline runs end-to-end on example contract.
 
