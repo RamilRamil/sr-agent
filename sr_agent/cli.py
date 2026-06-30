@@ -229,3 +229,63 @@ def confirm_cmd(confirmation_id: str, approve: bool, reject: bool, show: bool) -
         sys.exit(2)
 
     click.echo(f"Confirmation {confirmation_id}: {status.value}")
+
+
+@cli.command("relay")
+@click.argument("request_id", required=False)
+@click.option("--show", is_flag=True, help="Print the request packet to copy into Claude")
+@click.option("--respond", "respond_file", default=None, type=click.Path(),
+              help="Ingest a saved Claude response file for REQUEST_ID")
+@click.option("--list", "list_flag", is_flag=True, help="List requests awaiting a response")
+def relay_cmd(request_id: str | None, show: bool, respond_file: str | None, list_flag: bool) -> None:
+    """Manual LLM relay: show a request, submit a response, or list pending.
+
+    Relayed responses are external_llm_output — carrying a file does not grant
+    human authority (use `sr-agent confirm` for that).
+    """
+    from sr_agent.orchestrator.relay import (
+        ingest_response, list_pending, read_request, save_response,
+    )
+    relay_dir = config.relay_root
+
+    if list_flag:
+        pending = list_pending(relay_dir)
+        if not pending:
+            click.echo("No pending relay requests.")
+        for rid in pending:
+            click.echo(rid)
+        return
+
+    if not request_id:
+        click.echo("A REQUEST_ID is required (or use --list).", err=True)
+        sys.exit(2)
+
+    if show:
+        try:
+            click.echo(read_request(request_id, relay_dir))
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(2)
+        return
+
+    if respond_file:
+        text = Path(respond_file).read_text(encoding="utf-8")
+        save_response(request_id, relay_dir, text)
+        result = ingest_response(request_id, relay_dir, response_text=text)
+        if result.needs_resend:
+            click.echo(
+                f"Response saved but unparseable — please resend. "
+                f"({'; '.join(result.errors)})",
+                err=True,
+            )
+            sys.exit(1)
+        click.echo(
+            f"Response saved: {len(result.findings)} finding(s) parsed, "
+            f"{len(result.errors)} error(s)."
+        )
+        for err in result.errors:
+            click.echo(f"  ! {err}", err=True)
+        return
+
+    click.echo("Specify one of --show / --respond <file> / --list.", err=True)
+    sys.exit(2)

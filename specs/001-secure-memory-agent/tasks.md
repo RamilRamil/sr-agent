@@ -175,12 +175,12 @@
 
 **Decision**: `research/relay-architecture.md` — B / B / middle / yes. Replaces a live Claude API: the orchestrator plans deterministically, Claude is a batch analysis engine reached by carrying files. All tasks below are deterministic and testable on fixtures (no API, no Docker). **Rule: relayed output = `source_type=external_llm_output`, never `human_input` (relay ≠ authoring).**
 
-- [ ] RLY1 Create `sr_agent/orchestrator/relay.py` — `request_analysis(target, context, relay_dir) -> RelayRequest` writes `relay/requests/{id}.md` (wrapped context + Finding JSON schema + paste instructions); `ingest_response(id, relay_dir) -> list[Finding]` reads `relay/responses/{id}.json`, extracts fenced JSON, validates each `Finding`, sanitizes notes, returns with `source_type=external_llm_output`; malformed/missing → re-request (fail-safe). Mirrors `confirmation.py`.
-- [ ] RLY2 Fenced-JSON adapter (in relay.py) — tolerant extraction of the JSON block from free-form Claude text; strict `Finding` validation; surrounding prose ignored.
-- [ ] RLY3 Extend `sr_agent/cli.py` — `sr-agent relay --show <id>` (print prompt to copy) / `--respond <id> <file>` (ingest response) / `--list` (pending requests).
+- [X] RLY1 Create `sr_agent/orchestrator/relay.py` — `request_analysis(target, context, relay_dir) -> RelayRequest` writes `relay/requests/{id}.md` (wrapped context + Finding JSON schema + paste instructions); `ingest_response(id, relay_dir) -> list[Finding]` reads `relay/responses/{id}.json`, extracts fenced JSON, validates each `Finding`, sanitizes notes, returns with `source_type=external_llm_output`; malformed/missing → re-request (fail-safe). Mirrors `confirmation.py`.
+- [X] RLY2 Fenced-JSON adapter (in relay.py) — tolerant extraction of the JSON block from free-form Claude text; strict `Finding` validation; surrounding prose ignored.
+- [X] RLY3 Extend `sr_agent/cli.py` — `sr-agent relay --show <id>` (print prompt to copy) / `--respond <id> <file>` (ingest response) / `--list` (pending requests).
 - [ ] RLY4 Checkpoint-resume — `sr-agent resume`: Stage 2 emits all relay requests, checkpoints, exits cleanly; resume ingests responses and continues (batch-friendly). Reuses `orchestrator/checkpoint.py`.
 - [ ] RLY5 `ReasoningProvider` interface + `ModelRouter` — route Stage 2 `TaskType` to `RelayBridge` (CodexClient later); single `complete()`-shaped contract so the loop is backend-agnostic.
-- [ ] RLY6 Tests `tests/integration/test_relay.py` — fixtures of sample Claude responses: request created; response ingested → `Finding` with `external_llm_output` provenance; malformed → re-request; **relay ≠ authoring** (a relayed `verified_safe` is still blocked by the status gate).
+- [X] RLY6 Tests `tests/integration/test_relay.py` — fixtures of sample Claude responses: request created; response ingested → `Finding` with `external_llm_output` provenance; malformed → re-request; **relay ≠ authoring** (a relayed `verified_safe` is still blocked by the status gate).
 
 ### Stages (amended for relay)
 
