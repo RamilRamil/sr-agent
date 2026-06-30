@@ -72,17 +72,57 @@ def audit(
 
     click.echo(f"Starting audit for project '{derived_project_id}'…")
 
+    if audit_path is None:
+        click.echo(
+            "The relay pipeline needs a local path; address-based audit is not "
+            "yet supported.", err=True,
+        )
+        sys.exit(2)
+
     from sr_agent.memory.episodic import EpisodicMemory
-    from sr_agent.orchestrator.loop import OrchestratorLoop
+    from sr_agent.orchestrator.pipeline import start_audit
 
     memory = EpisodicMemory(config.memory_root, config.secret_key)
-    session = AuditSession(principal=principal, audit_input=audit_input)
+    relay_dir = config.relay_root
+    runs_dir = config.relay_root / "runs"
 
-    loop = OrchestratorLoop(session, memory, audit_root=audit_path or Path("."))
-    result = loop.run(system_prompt="Perform Stage 1 discovery audit.")
+    result = start_audit(audit_input, audit_path, memory, relay_dir, runs_dir, output=output)
 
-    click.echo(f"Audit complete. Findings: {len(result.findings)}, Stop: {result.stop_reason}")
-    sys.exit(0 if result.completed else 1)
+    if result.status == "paused":
+        click.echo(f"Stage 1 done. {result.pending} target(s) need analysis via relay:")
+        click.echo("  1. sr-agent relay --list                      # pending request ids")
+        click.echo("  2. sr-agent relay --show <id>                 # copy into Claude")
+        click.echo("  3. sr-agent relay --respond <id> <file>       # submit each answer")
+        click.echo(f"  4. sr-agent resume {result.session_id}")
+        sys.exit(0)
+
+    click.echo(f"Audit complete: {result.findings_count} finding(s) → {result.report_path}")
+    sys.exit(0)
+
+
+@cli.command("resume")
+@click.argument("session_id")
+def resume_cmd(session_id: str) -> None:
+    """Resume a paused audit: ingest relay responses, finish the report."""
+    from sr_agent.memory.episodic import EpisodicMemory
+    from sr_agent.orchestrator.pipeline import resume_audit
+
+    memory = EpisodicMemory(config.memory_root, config.secret_key)
+    relay_dir = config.relay_root
+    runs_dir = config.relay_root / "runs"
+
+    try:
+        result = resume_audit(session_id, memory, relay_dir, runs_dir)
+    except FileNotFoundError as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(2)
+
+    if result.status == "paused":
+        click.echo(f"Still waiting on {result.pending} response(s). Run `sr-agent relay --list`.")
+        sys.exit(0)
+
+    click.echo(f"Audit complete: {result.findings_count} finding(s) → {result.report_path}")
+    sys.exit(0)
 
 
 @cli.command("demo-attack")
