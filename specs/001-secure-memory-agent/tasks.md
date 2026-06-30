@@ -171,14 +171,27 @@
 
 ### Stage Planners
 
-- [ ] T054 Create `sr_agent/planner/stage1.py` — `run_stage1(session, llm_client) -> Stage1Report`: ReAct loop; calls `build_graph`, `find_red_flag_functions`, SIG-prioritized `read_file` analysis; stopping: circuit breaker (max_iterations) + human decision checkpoint; outputs structured `Stage1Report` with `analyzed`, `not_analyzed`, `targets`, `red_flags`
-- [ ] T055 Create `sr_agent/planner/stage2.py` — `run_stage2(session, targets, llm_client) -> list[Finding]`: deterministic for-loop over Stage 1 targets; calls local Qwen3-4B per target; writes each finding to Episodic Memory; saves checkpoint after each target; retry N times → skip with `SkipReason` on persistent failure
+### Phase 8A — Relay subsystem (LLM via manual file relay)
+
+**Decision**: `research/relay-architecture.md` — B / B / middle / yes. Replaces a live Claude API: the orchestrator plans deterministically, Claude is a batch analysis engine reached by carrying files. All tasks below are deterministic and testable on fixtures (no API, no Docker). **Rule: relayed output = `source_type=external_llm_output`, never `human_input` (relay ≠ authoring).**
+
+- [ ] RLY1 Create `sr_agent/orchestrator/relay.py` — `request_analysis(target, context, relay_dir) -> RelayRequest` writes `relay/requests/{id}.md` (wrapped context + Finding JSON schema + paste instructions); `ingest_response(id, relay_dir) -> list[Finding]` reads `relay/responses/{id}.json`, extracts fenced JSON, validates each `Finding`, sanitizes notes, returns with `source_type=external_llm_output`; malformed/missing → re-request (fail-safe). Mirrors `confirmation.py`.
+- [ ] RLY2 Fenced-JSON adapter (in relay.py) — tolerant extraction of the JSON block from free-form Claude text; strict `Finding` validation; surrounding prose ignored.
+- [ ] RLY3 Extend `sr_agent/cli.py` — `sr-agent relay --show <id>` (print prompt to copy) / `--respond <id> <file>` (ingest response) / `--list` (pending requests).
+- [ ] RLY4 Checkpoint-resume — `sr-agent resume`: Stage 2 emits all relay requests, checkpoints, exits cleanly; resume ingests responses and continues (batch-friendly). Reuses `orchestrator/checkpoint.py`.
+- [ ] RLY5 `ReasoningProvider` interface + `ModelRouter` — route Stage 2 `TaskType` to `RelayBridge` (CodexClient later); single `complete()`-shaped contract so the loop is backend-agnostic.
+- [ ] RLY6 Tests `tests/integration/test_relay.py` — fixtures of sample Claude responses: request created; response ingested → `Finding` with `external_llm_output` provenance; malformed → re-request; **relay ≠ authoring** (a relayed `verified_safe` is still blocked by the status gate).
+
+### Stages (amended for relay)
+
+- [ ] T054 Create `sr_agent/planner/stage1.py` — `run_stage1(session) -> Stage1Report`: **deterministic SIG-based planning** (build_sig → find_red_flag_functions → SIG-prioritized targets), no LLM ReAct loop (relay decision); outputs `Stage1Report` with `analyzed`, `not_analyzed`, `targets`, `red_flags`. A relay request is emitted only if a discovery judgment genuinely needs the model.
+- [ ] T055 Create `sr_agent/planner/stage2.py` — `run_stage2(session, targets, provider) -> list[Finding]`: deterministic for-loop over Stage 1 targets; **per target emits a relay request via RelayBridge (Claude now / Codex later) instead of local Qwen3-4B**; ingested findings validated + sanitized + written to Episodic Memory as `external_llm_output`; checkpoint after each target; requests are batch-emitted then `resume`d (Fork 2)
 - [ ] T056 Create `sr_agent/planner/stage3.py` — `run_stage3(session, findings, sig, llm_client) -> list[Finding]`: SIG-filtered combination candidates; extended thinking on Claude Opus for each pair; non-transitivity check for trios of Critical findings; updates finding `combined_with` field
 
 ### Local LLM + Knowledge Base
 
-- [ ] T057 Create `sr_agent/llm_core/local_client.py` — `LocalClient.complete(messages, task_type) -> AgentAction`: calls Ollama via `requests` to local endpoint; validates response against `AgentAction` schema; raises `ModelUnavailableError` if Ollama not reachable
-- [ ] T058 Create `sr_agent/llm_core/file_bridge.py` — `FileBridgeReader.read(tool, target, *, max_age_minutes) -> ExternalLLMResult`: reads `/shared/results/{tool}-{target}.json`; validates freshness (timestamp check) and tamper (sha256 content_hash); returns result with `source_type: external_llm_output`
+- [ ] T057 [DEFERRED — relay decision] Create `sr_agent/llm_core/local_client.py` (Ollama) — superseded for now by RelayBridge (RLY1/RLY5); keep for a future local/Codex backend behind the same `ReasoningProvider` interface
+- [ ] T058 [SUPERSEDED BY RELAY] `file_bridge.py` reader — folded into Phase 8A `relay.py` `ingest_response` (RLY1): reads `relay/responses/{id}.json`, `source_type=external_llm_output`. Cryptographic tamper-check N/A under manual relay (the human transport is the trust boundary); schema validation + all guardrails still apply
 - [ ] T059 Create `sr_agent/memory/knowledge.py` — `KnowledgeBase.search(query, category, top_k) -> list[KnowledgeChunk]`: query-expansion via `qmd-17B` local call, embedding via `gemma-300M`, reranker via `qwen-reranker-0.6b`; reads from `knowledge/` directory tree
 
 ### On-Chain Tools
