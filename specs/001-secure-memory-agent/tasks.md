@@ -201,7 +201,7 @@
 ### I/O
 
 - [ ] T061 [P] Create `sr_agent/io/progress.py` — `ProgressStream`: emits `PROGRESS_EVENTS` as human-readable lines with progress bar; `emit(event_type, detail)` method; used by orchestrator loop at each checkpoint
-- [ ] T062 [P] Create `sr_agent/io/report.py` — `generate_report(session: AuditSession) -> str`: Markdown report per contracts/cli.md format; severity-first ordering; separate `## Unverified Findings` section; `## Coverage` with analyzed/not-analyzed lists; writes to `--output` path
+- [X] T062 [P] Create `sr_agent/io/report.py` — `generate_report(session: AuditSession) -> str`: Markdown report per contracts/cli.md format; severity-first ordering; separate `## Unverified Findings` section; `## Coverage` with analyzed/not-analyzed lists; writes to `--output` path
 
 ### Wiring
 

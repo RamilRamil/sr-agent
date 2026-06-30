@@ -105,13 +105,18 @@ def run_stage2(
             continue
 
         for relay_finding in result.findings:
+            payload = relay_finding.finding.model_dump()
+            # Persist the sanitized analysis notes + any sanitize flags so the
+            # report can show why the finding matters. notes is data, not a command.
+            payload["notes"] = relay_finding.notes
+            payload["notes_flags"] = relay_finding.notes_flags
             record = MemoryRecord(
                 project_id=session.principal.project_id,
                 target=entry["target"],
                 source_type=SourceType.external_llm_output,
                 tool=None,
                 session_id=session.session_id,
-                finding=relay_finding.finding.model_dump(),
+                finding=payload,
             )
             memory.write(record, principal=session.principal)
             findings.append(relay_finding.finding)
