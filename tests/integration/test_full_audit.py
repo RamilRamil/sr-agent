@@ -6,6 +6,9 @@ wrapped the contract as data, findings are stored with external_llm_output
 provenance, and the report carries Findings + Coverage.
 """
 import json
+import shutil
+import subprocess
+
 import pytest
 from pathlib import Path
 
@@ -16,6 +19,17 @@ from sr_agent.orchestrator.pipeline import resume_audit, start_audit
 from sr_agent.orchestrator.relay import save_response
 
 SECRET = b"test-secret-key-32-bytes-exactly!"
+
+
+def _slither_ready() -> bool:
+    if shutil.which("docker") is None:
+        return False
+    try:
+        r = subprocess.run(["docker", "image", "inspect", "slither-sandbox"],
+                           capture_output=True, timeout=10)
+        return r.returncode == 0
+    except Exception:
+        return False
 
 
 @pytest.fixture
@@ -34,7 +48,7 @@ def test_audit_on_example_contract(tmp_path, example_root):
     out = tmp_path / "audit-report.md"
 
     # 1. start: Stage 1 prioritizes withdraw and emits a relay request, then pauses.
-    started = start_audit(_audit_input(example_root), example_root, mem, relay, runs, output=str(out))
+    started = start_audit(_audit_input(example_root), example_root, mem, relay, runs, output=str(out), run_static=False)
     assert started.status == "paused"
     assert started.pending >= 1
 
@@ -82,7 +96,7 @@ def test_audit_with_no_findings_still_reports(tmp_path, example_root):
     relay, runs = tmp_path / "relay", tmp_path / "runs"
     out = tmp_path / "r.md"
 
-    started = start_audit(_audit_input(example_root), example_root, mem, relay, runs, output=str(out))
+    started = start_audit(_audit_input(example_root), example_root, mem, relay, runs, output=str(out), run_static=False)
     manifest = json.loads((relay / "manifest" / f"{started.session_id}.json").read_text())
     for rid in manifest:
         save_response(rid, relay, json.dumps({"findings": []}))
@@ -91,3 +105,21 @@ def test_audit_with_no_findings_still_reports(tmp_path, example_root):
     assert done.status == "done"
     assert done.findings_count == 0
     assert "_No confirmed findings._" in out.read_text()
+
+
+@pytest.mark.skipif(not _slither_ready(), reason="slither-sandbox image unavailable")
+def test_static_pass_adds_tool_output_findings(tmp_path, example_root):
+    """With Slither available, start_audit seeds tool_output findings itself."""
+    mem = EpisodicMemory(tmp_path / "mem", SECRET)
+    relay, runs = tmp_path / "relay", tmp_path / "runs"
+
+    start_audit(_audit_input(example_root), example_root, mem, relay, runs,
+                output=str(tmp_path / "r.md"), run_static=True)
+
+    records = mem.load_for_principal(_audit_input(example_root).principal)
+    slither_records = [
+        r for r in records
+        if r.source_type is SourceType.tool_output and r.tool == "run_slither"
+    ]
+    assert slither_records, "no Slither tool_output findings were written"
+    assert any((r.finding or {}).get("bastet_tag") == "reentrancy" for r in slither_records)

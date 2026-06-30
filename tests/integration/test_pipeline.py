@@ -40,6 +40,7 @@ def test_start_audit_pauses(tmp_path, example_root):
         _audit_input(example_root), example_root,
         EpisodicMemory(tmp_path / "mem", SECRET),
         tmp_path / "relay", tmp_path / "runs", output=str(tmp_path / "r.md"),
+        run_static=False,
     )
     assert res.status == "paused"
     assert res.pending >= 1
@@ -51,7 +52,8 @@ def test_full_audit_then_resume(tmp_path, example_root):
     relay, runs = tmp_path / "relay", tmp_path / "runs"
     out = tmp_path / "report.md"
 
-    res = start_audit(_audit_input(example_root), example_root, mem, relay, runs, output=str(out))
+    res = start_audit(_audit_input(example_root), example_root, mem, relay, runs,
+                      output=str(out), run_static=False)
     _respond_all(relay, res.session_id)
     res2 = resume_audit(res.session_id, mem, relay, runs)
 
@@ -79,6 +81,7 @@ def test_progress_emitted_during_audit(tmp_path, example_root):
         EpisodicMemory(tmp_path / "mem", SECRET),
         tmp_path / "relay", tmp_path / "runs",
         output=str(tmp_path / "r.md"), progress=ProgressStream(stream=buf),
+        run_static=False,
     )
     out = buf.getvalue()
     assert "Stage 1 complete" in out
@@ -89,6 +92,6 @@ def test_resume_still_pending_without_responses(tmp_path, example_root):
     mem = EpisodicMemory(tmp_path / "mem", SECRET)
     relay, runs = tmp_path / "relay", tmp_path / "runs"
     res = start_audit(_audit_input(example_root), example_root, mem, relay, runs,
-                      output=str(tmp_path / "r.md"))
+                      output=str(tmp_path / "r.md"), run_static=False)
     res2 = resume_audit(res.session_id, mem, relay, runs)
     assert res2.status == "paused"
