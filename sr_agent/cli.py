@@ -79,6 +79,7 @@ def audit(
         )
         sys.exit(2)
 
+    from sr_agent.io.progress import ProgressStream
     from sr_agent.memory.episodic import EpisodicMemory
     from sr_agent.orchestrator.pipeline import start_audit
 
@@ -86,7 +87,10 @@ def audit(
     relay_dir = config.relay_root
     runs_dir = config.relay_root / "runs"
 
-    result = start_audit(audit_input, audit_path, memory, relay_dir, runs_dir, output=output)
+    result = start_audit(
+        audit_input, audit_path, memory, relay_dir, runs_dir,
+        output=output, progress=ProgressStream(),
+    )
 
     if result.status == "paused":
         click.echo(f"Stage 1 done. {result.pending} target(s) need analysis via relay:")
@@ -104,6 +108,7 @@ def audit(
 @click.argument("session_id")
 def resume_cmd(session_id: str) -> None:
     """Resume a paused audit: ingest relay responses, finish the report."""
+    from sr_agent.io.progress import ProgressStream
     from sr_agent.memory.episodic import EpisodicMemory
     from sr_agent.orchestrator.pipeline import resume_audit
 
@@ -112,7 +117,7 @@ def resume_cmd(session_id: str) -> None:
     runs_dir = config.relay_root / "runs"
 
     try:
-        result = resume_audit(session_id, memory, relay_dir, runs_dir)
+        result = resume_audit(session_id, memory, relay_dir, runs_dir, progress=ProgressStream())
     except FileNotFoundError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(2)

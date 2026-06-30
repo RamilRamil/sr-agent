@@ -69,6 +69,22 @@ def test_resume_unknown_session_raises(tmp_path):
                      tmp_path / "relay", tmp_path / "runs")
 
 
+def test_progress_emitted_during_audit(tmp_path, example_root):
+    import io
+    from sr_agent.io.progress import ProgressStream
+
+    buf = io.StringIO()
+    start_audit(
+        _audit_input(example_root), example_root,
+        EpisodicMemory(tmp_path / "mem", SECRET),
+        tmp_path / "relay", tmp_path / "runs",
+        output=str(tmp_path / "r.md"), progress=ProgressStream(stream=buf),
+    )
+    out = buf.getvalue()
+    assert "Stage 1 complete" in out
+    assert "Paused" in out
+
+
 def test_resume_still_pending_without_responses(tmp_path, example_root):
     mem = EpisodicMemory(tmp_path / "mem", SECRET)
     relay, runs = tmp_path / "relay", tmp_path / "runs"
