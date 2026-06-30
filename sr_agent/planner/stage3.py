@@ -18,9 +18,13 @@ from __future__ import annotations
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from sr_agent.guardrails.severity import check_severity
 from sr_agent.models.finding import Finding, Severity
+
+if TYPE_CHECKING:
+    from sr_agent.planner.sig import StateInterferenceGraph
 
 logger = logging.getLogger(__name__)
 
@@ -37,8 +41,16 @@ class Stage3Result:
     combinations: list[str] = field(default_factory=list)
 
 
-def run_stage3(findings: list[Finding]) -> Stage3Result:
-    """Correct severities and link/elevate interacting findings."""
+def run_stage3(
+    findings: list[Finding],
+    sigs: dict[str, "StateInterferenceGraph"] | None = None,
+) -> Stage3Result:
+    """Correct severities and link/elevate interacting findings.
+
+    If a per-file State Interference Graph is provided, findings combine only
+    when their functions actually share state; otherwise the fallback links all
+    findings in the same source file.
+    """
     corrections: list[str] = []
     combinations: list[str] = []
 
@@ -49,7 +61,7 @@ def run_stage3(findings: list[Finding]) -> Stage3Result:
             finding.severity = verdict.final
             corrections.append(verdict.correction_reason or "")
 
-    # Pass 2 — group by source file (SIG-lite: same file -> shared state).
+    # Pass 2 — group by source file, then link by interference.
     groups: dict[str, list[Finding]] = defaultdict(list)
     for finding in findings:
         groups[finding.location.split(":")[0]].append(finding)
@@ -57,21 +69,31 @@ def run_stage3(findings: list[Finding]) -> Stage3Result:
     for source_file, group in groups.items():
         if len(group) < 2:
             continue
-        ids = [f.finding_id for f in group]
-        for finding in group:
-            finding.combined_with = [i for i in ids if i != finding.finding_id]
+        sig = (sigs or {}).get(source_file)
 
-        # Conservative chain rule: 2+ unmitigated high/critical findings interact.
+        def interacts(a: Finding, b: Finding) -> bool:
+            if a is b:
+                return False
+            if sig is None:
+                return True  # fallback: same file = interacting
+            return sig.interferes(a.location.split(":")[-1], b.location.split(":")[-1])
+
+        for finding in group:
+            finding.combined_with = [g.finding_id for g in group if interacts(finding, g)]
+
+        # Conservative chain rule: 2+ unmitigated high/critical findings that
+        # interact with each other -> critical chain.
         severe = [
             f for f in group
             if _RANK[f.severity] >= _RANK[Severity.high] and not f.mitigations_present
         ]
-        if len(severe) >= 2:
-            for finding in severe:
+        elevate = [f for f in severe if any(interacts(f, g) for g in severe)]
+        if len(elevate) >= 2:
+            for finding in elevate:
                 finding.severity = Severity.critical
             combinations.append(
-                f"{source_file}: {len(severe)} interacting unmitigated high+ findings "
-                f"→ critical chain ({', '.join(f.finding_id for f in severe)})"
+                f"{source_file}: {len(elevate)} interacting unmitigated high+ findings "
+                f"→ critical chain ({', '.join(f.finding_id for f in elevate)})"
             )
 
     logger.info(

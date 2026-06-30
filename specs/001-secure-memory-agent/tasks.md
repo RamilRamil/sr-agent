@@ -167,7 +167,7 @@
 
 ### State Interference Graph
 
-- [ ] T053 Create `sr_agent/planner/sig.py` — `build_sig(contracts: list[FilePath]) -> StateInterferenceGraph`: parses Solidity AST via Slither output to extract read/write sets per function; computes `interferes(fi,fj)` and `can_reenter(fi→fj)` edges per research.md formulas; `get_filtered_pairs(findings) -> list[tuple]` for Stage 3 SIG filter
+- [X] T053 Create `sr_agent/planner/sig.py` — `build_sig(contracts: list[FilePath]) -> StateInterferenceGraph`: parses Solidity AST via Slither output to extract read/write sets per function; computes `interferes(fi,fj)` and `can_reenter(fi→fj)` edges per research.md formulas; `get_filtered_pairs(findings) -> list[tuple]` for Stage 3 SIG filter
 
 ### Stage Planners
 
