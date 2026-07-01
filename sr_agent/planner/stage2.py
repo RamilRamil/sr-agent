@@ -110,6 +110,7 @@ def run_stage2(
             # report can show why the finding matters. notes is data, not a command.
             payload["notes"] = relay_finding.notes
             payload["notes_flags"] = relay_finding.notes_flags
+            payload["engine"] = "model"
             record = MemoryRecord(
                 project_id=session.principal.project_id,
                 target=entry["target"],
@@ -169,6 +170,7 @@ def run_stage2_local(
             payload = relay_finding.finding.model_dump()
             payload["notes"] = relay_finding.notes
             payload["notes_flags"] = relay_finding.notes_flags
+            payload["engine"] = "model"
             memory.write(
                 MemoryRecord(
                     project_id=session.principal.project_id,

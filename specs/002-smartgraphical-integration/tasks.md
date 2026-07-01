@@ -9,14 +9,14 @@
 
 ## Phase 1: Setup
 
-- [ ] T001 [P] Create `tests/fixtures/smartgraphical/` with `sample_findings.json` (a real `sg_cli ... all auditor json` output containing a logic finding + an evidence with function/line) and `sample_graph.json` (a `{nodes, edges}` payload with `state_to_function_read/write`, `function_to_function`, and a `cross_type_call` edge)
-- [ ] T002 [P] Add `examples/inheritance-vault/` — two `.sol` files where a child contract's function and an inherited parent function write the same state variable (US2 fixture; minimal, compiles under ^0.8.20)
+- [X] T001 [P] Create `tests/fixtures/smartgraphical/` with `sample_findings.json` (a real `sg_cli ... all auditor json` output containing a logic finding + an evidence with function/line) and `sample_graph.json` (a `{nodes, edges}` payload with `state_to_function_read/write`, `function_to_function`, and a `cross_type_call` edge)
+- [X] T002 [P] Add `examples/inheritance-vault/` — two `.sol` files where a child contract's function and an inherited parent function write the same state variable (US2 fixture; minimal, compiles under ^0.8.20)
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-- [ ] T003 Create `sr_agent/tools/smartgraphical.py` — `SmartGraphicalError`, `SGFinding` dataclass (rule_id, task_id, title, category, confidence, message, remediation_hint, function, line), `SG_CONFIDENCE_TO_SEVERITY` (high/medium/low), and `SG_RULE_TO_TAG` lookup (per research.md R3; unmapped → None)
+- [X] T003 Create `sr_agent/tools/smartgraphical.py` — `SmartGraphicalError`, `SGFinding` dataclass (rule_id, task_id, title, category, confidence, message, remediation_hint, function, line), `SG_CONFIDENCE_TO_SEVERITY` (high/medium/low), and `SG_RULE_TO_TAG` lookup (per research.md R3; unmapped → None)
 
 **Checkpoint**: shared module + mappings exist; user stories can build in parallel.
 
@@ -28,13 +28,13 @@
 
 **Independent Test**: Run an audit on a contract with a logic flaw the others miss; assert a SmartGraphical-attributed `tool_output` finding appears in the report.
 
-- [ ] T004 [P] [US1] Implement `parse_sg_findings(stdout) -> list[SGFinding]` in `sr_agent/tools/smartgraphical.py` — tolerant JSON parse (extracts `findings[]`, first evidence → function/line); empty/garbled → `[]`; raises `SmartGraphicalError` only on non-JSON non-empty text
-- [ ] T005 [P] [US1] Implement `sg_to_findings(sg_findings, file_rel) -> list[Finding]` — severity from confidence, bastet_tag via `SG_RULE_TO_TAG`, location `file_rel:line`, function_name from evidence (mirrors `slither_to_findings`)
-- [ ] T006 [US1] Implement `run_smartgraphical(target, audit_root, runner, timeout_s=120)` — subprocess CLI (and Docker `smartgraphical:local` option) producing JSON; parse via `parse_sg_findings`; raise `SmartGraphicalError`/`SandboxUnavailable` when unavailable
-- [ ] T007 [US1] Extend `sr_agent/orchestrator/pipeline.py::_run_static_analysis` — also run SmartGraphical per file (best-effort, auto-skip on any error), writing findings to memory as `source_type=tool_output` with payload `engine="smartgraphical"` + `rule_id`/`category`/`confidence`/notes
-- [ ] T008 [US1] Add `engine` attribution across finding-writing paths — set `engine="slither"` in the Slither pass, `engine="model"` in `run_stage2_local`/relay ingest; extend `sr_agent/io/report.py::_render_finding` to show an `Engine:` line when present
-- [ ] T009 [P] [US1] Unit tests `tests/unit/test_smartgraphical.py` — `parse_sg_findings` (fixture + garbage + empty), `sg_to_findings` (severity/tag/location mapping, unmapped rule → None tag), confidence→severity table
-- [ ] T010 [US1] Live integration test `tests/integration/test_smartgraphical_live.py` — auto-skip if SmartGraphical CLI/Docker unavailable; on the example contract assert ≥1 SmartGraphical finding with engine attribution (SC-001)
+- [X] T004 [P] [US1] Implement `parse_sg_findings(stdout) -> list[SGFinding]` in `sr_agent/tools/smartgraphical.py` — tolerant JSON parse (extracts `findings[]`, first evidence → function/line); empty/garbled → `[]`; raises `SmartGraphicalError` only on non-JSON non-empty text
+- [X] T005 [P] [US1] Implement `sg_to_findings(sg_findings, file_rel) -> list[Finding]` — severity from confidence, bastet_tag via `SG_RULE_TO_TAG`, location `file_rel:line`, function_name from evidence (mirrors `slither_to_findings`)
+- [X] T006 [US1] Implement `run_smartgraphical(target, audit_root, runner, timeout_s=120)` — subprocess CLI (and Docker `smartgraphical:local` option) producing JSON; parse via `parse_sg_findings`; raise `SmartGraphicalError`/`SandboxUnavailable` when unavailable
+- [X] T007 [US1] Extend `sr_agent/orchestrator/pipeline.py::_run_static_analysis` — also run SmartGraphical per file (best-effort, auto-skip on any error), writing findings to memory as `source_type=tool_output` with payload `engine="smartgraphical"` + `rule_id`/`category`/`confidence`/notes
+- [X] T008 [US1] Add `engine` attribution across finding-writing paths — set `engine="slither"` in the Slither pass, `engine="model"` in `run_stage2_local`/relay ingest; extend `sr_agent/io/report.py::_render_finding` to show an `Engine:` line when present
+- [X] T009 [P] [US1] Unit tests `tests/unit/test_smartgraphical.py` — `parse_sg_findings` (fixture + garbage + empty), `sg_to_findings` (severity/tag/location mapping, unmapped rule → None tag), confidence→severity table
+- [X] T010 [US1] Live integration test `tests/integration/test_smartgraphical_live.py` — auto-skip if SmartGraphical CLI/Docker unavailable; on the example contract assert ≥1 SmartGraphical finding with engine attribution (SC-001)
 
 **Checkpoint**: SC-001 — SmartGraphical contributes a logic finding the other engines miss, attributed in the report.
 
