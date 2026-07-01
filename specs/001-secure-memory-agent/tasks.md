@@ -196,7 +196,7 @@
 
 ### On-Chain Tools
 
-- [ ] T060 [P] Create `sr_agent/tools/onchain.py` — `analyze_transactions(address, block_range, focus) -> TransactionAnalysis`: calls Alchemy archive node via `web3.py`; max 10_000 blocks; all calldata → `source_type: tool_output`, always wrapped in `[DATA]`; `decompile_bytecode(address, tool) -> DecompilationResult`: calls Heimdall or Panoramix
+- [X] T060 [P] Create `sr_agent/tools/onchain.py` — `analyze_transactions(address, block_range, focus) -> TransactionAnalysis`: calls Alchemy archive node via `web3.py`; max 10_000 blocks; all calldata → `source_type: tool_output`, always wrapped in `[DATA]`; `decompile_bytecode(address, tool) -> DecompilationResult`: calls Heimdall or Panoramix
 
 ### I/O
 
