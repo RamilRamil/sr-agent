@@ -115,3 +115,80 @@ def get_filtered_pairs(finding_locations: list[str], sig: StateInterferenceGraph
             if sig.interferes(fn_a, fn_b):
                 pairs.append((finding_locations[i], finding_locations[j]))
     return pairs
+
+
+# ── SmartGraphical graph → SIG (feature 002, US2) ────────────────────────────
+
+def _node_short_name(node_id: str) -> str | None:
+    """`function:Base._credit` -> `_credit`; `state:Base.balances` -> `balances`."""
+    if ":" not in node_id:
+        return None
+    return node_id.split(":", 1)[1].split(".")[-1]
+
+
+def parse_sg_graph(graph) -> dict:
+    """Normalize a SmartGraphical graph payload to `{nodes, edges}`."""
+    if isinstance(graph, dict) and "nodes" in graph and "edges" in graph:
+        return {"nodes": graph.get("nodes", []), "edges": graph.get("edges", [])}
+    ms = (graph or {}).get("model_summary", {}) if isinstance(graph, dict) else {}
+    inner = ms.get("graph", {}) if isinstance(ms, dict) else {}
+    return {"nodes": inner.get("nodes", []), "edges": inner.get("edges", [])}
+
+
+def build_sig_from_smartgraphical(graph) -> StateInterferenceGraph:
+    """Build the interference graph from SmartGraphical's structural edges.
+
+    Read/write sets come from `state_to_function_*` (+ `cross_type_state_*`)
+    edges; external-call flags from `function_to_system`/`function_to_object`.
+    Crucially, state is propagated along `function_to_function`/`cross_type_call`
+    edges: a caller inherits its callees' reads/writes (transitive, cycle-safe).
+    This captures cross-inheritance state sharing that the single-file regex SIG
+    cannot see (a child function calling an inherited state-mutating parent).
+    """
+    graph = parse_sg_graph(graph)
+    sig = StateInterferenceGraph()
+
+    for node in graph["nodes"]:
+        if node.get("group") == "function":
+            name = _node_short_name(node.get("id", "")) or ""
+            if name:
+                sig.functions.setdefault(name, FunctionNode(name=name))
+
+    calls: dict[str, set[str]] = {}
+    for edge in graph["edges"]:
+        kind = edge.get("kind", "")
+        src = _node_short_name(edge.get("source", "") or "")
+        tgt = _node_short_name(edge.get("target", "") or "")
+        if kind in ("state_to_function_read", "cross_type_state_read"):
+            if tgt in sig.functions and src:
+                sig.functions[tgt].reads.add(src)
+        elif kind in ("state_to_function_write", "cross_type_state_write"):
+            if tgt in sig.functions and src:
+                sig.functions[tgt].writes.add(src)
+        elif kind in ("function_to_function", "cross_type_call"):
+            if src in sig.functions and tgt:
+                calls.setdefault(src, set()).add(tgt)
+        elif kind in ("function_to_system", "function_to_object"):
+            if src in sig.functions:
+                sig.functions[src].has_external_call = True
+
+    # Transitive propagation of callee state to callers (cycle-safe).
+    def _reachable(start: str) -> set[str]:
+        seen: set[str] = set()
+        stack = list(calls.get(start, ()))
+        while stack:
+            nxt = stack.pop()
+            if nxt in seen:
+                continue
+            seen.add(nxt)
+            stack.extend(calls.get(nxt, ()))
+        return seen
+
+    for name, node in sig.functions.items():
+        for callee in _reachable(name):
+            other = sig.functions.get(callee)
+            if other and callee != name:
+                node.reads |= other.reads
+                node.writes |= other.writes
+
+    return sig

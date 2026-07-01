@@ -46,10 +46,10 @@
 
 **Independent Test**: On the inheritance example, assert the SG-built graph marks the child/parent functions sharing state as interacting and Stage 3 links their findings — a case the regex SIG misses.
 
-- [ ] T011 [US2] Implement `parse_sg_graph(stdout_or_payload) -> dict` and `build_sig_from_smartgraphical(graph) -> StateInterferenceGraph` in `sr_agent/planner/sig.py` — reads/writes from `state_to_function_read/write` (+ `cross_type_state_*`), adjacency from `function_to_function`/`cross_type_call`, external-call flags from system/object edges; same `interferes()`/`can_reenter()`
-- [ ] T012 [US2] Extend `sr_agent/orchestrator/pipeline.py::_finish` — obtain SmartGraphical's graph (per-file or bundle) and build the SIG from it when available; fall back to `build_sig` otherwise; pass the chosen SIG to `run_stage3`
-- [ ] T013 [P] [US2] Unit tests `tests/unit/test_sig.py` (extend) — `build_sig_from_smartgraphical` on `sample_graph.json`: read/write sets correct, `function_to_function`/`cross_type_call` adjacency, inheritance functions interfere
-- [ ] T014 [US2] Integration test on `examples/inheritance-vault/` — child+parent functions sharing state are linked in Stage 3 `combined_with` via the SG graph (auto-skip live SG; or use a stored graph fixture for determinism) (SC-002)
+- [X] T011 [US2] Implement `parse_sg_graph(stdout_or_payload) -> dict` and `build_sig_from_smartgraphical(graph) -> StateInterferenceGraph` in `sr_agent/planner/sig.py` — reads/writes from `state_to_function_read/write` (+ `cross_type_state_*`), adjacency from `function_to_function`/`cross_type_call`, external-call flags from system/object edges; same `interferes()`/`can_reenter()`
+- [X] T012 [US2] Extend `sr_agent/orchestrator/pipeline.py::_finish` — obtain SmartGraphical's graph (per-file or bundle) and build the SIG from it when available; fall back to `build_sig` otherwise; pass the chosen SIG to `run_stage3`
+- [X] T013 [P] [US2] Unit tests `tests/unit/test_sig.py` (extend) — `build_sig_from_smartgraphical` on `sample_graph.json`: read/write sets correct, `function_to_function`/`cross_type_call` adjacency, inheritance functions interfere
+- [X] T014 [US2] Integration test on `examples/inheritance-vault/` — child+parent functions sharing state are linked in Stage 3 `combined_with` via the SG graph (auto-skip live SG; or use a stored graph fixture for determinism) (SC-002)
 
 **Checkpoint**: SC-002 — cross-inheritance interference detected and combined, beating the regex graph.
 
