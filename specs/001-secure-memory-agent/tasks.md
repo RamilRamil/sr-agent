@@ -251,19 +251,19 @@
 
 ### Dataset Preparation
 
-- [ ] T085 Create `scripts/finetune/prepare_dataset.py` — загрузить Bastet датасет (849 примеров) + Hermes FC `json_mode_agentic` subset (~1.3K примеров); конвертировать в единый ShareGPT формат с `AgentAction` JSON schema как target output; сохранить в `data/finetune/train.jsonl` и `data/finetune/val.jsonl` (90/10 split)
-- [ ] T086 [P] Create `scripts/finetune/generate_mi_rejections.py` — сгенерировать ~200 synthetic примеров MI-атак с правильными отклонениями: input = контракт + инъецированная memory запись, output = AgentAction с `next_action: "escalate"` и корректным `escalation_trigger`; добавить в train split
-- [ ] T087 [P] Create `data/finetune/README.md` — задокументировать источники датасета, лицензии (Bastet: CC BY-NC, Hermes FC: Apache 2.0), размер каждого split, формат примеров
+- [x] T085 Create `scripts/finetune/prepare_dataset.py` — загрузить Bastet датасет (849 примеров) + Hermes FC `json_mode_agentic` subset (~1.3K примеров); конвертировать в единый ShareGPT формат с `AgentAction` JSON schema как target output; сохранить в `data/finetune/train.jsonl` и `data/finetune/val.jsonl` (90/10 split)
+- [x] T086 [P] Create `scripts/finetune/generate_mi_rejections.py` — сгенерировать ~200 synthetic примеров MI-атак с правильными отклонениями: input = контракт + инъецированная memory запись, output = AgentAction с `next_action: "escalate"` и корректным `escalation_trigger`; добавить в train split
+- [x] T087 [P] Create `data/finetune/README.md` — задокументировать источники датасета, лицензии (Bastet: CC BY-NC, Hermes FC: Apache 2.0), размер каждого split, формат примеров
 
 ### Fine-tuning
 
-- [ ] T088 Create `scripts/finetune/finetune_stage2.py` — Unsloth + QLoRA: `FastLanguageModel.from_pretrained("Qwen/Qwen3-4B", load_in_4bit=True)`; LoRA `r=16`, target_modules `q_proj v_proj`; `SFTTrainer` на train.jsonl; сохранить адаптер в `adapters/qwen3-4b-stage2/`
-- [ ] T089 Create `scripts/finetune/Modelfile` — Ollama Modelfile указывающий на базовую модель + LoRA адаптер; инструкции по `ollama create sr-stage2 -f Modelfile`
+- [x] T088 Create `scripts/finetune/finetune_stage2.py` — Unsloth + QLoRA: `FastLanguageModel.from_pretrained("Qwen/Qwen3-4B", load_in_4bit=True)`; LoRA `r=16`, target_modules `q_proj v_proj`; `SFTTrainer` на train.jsonl; сохранить адаптер в `adapters/qwen3-4b-stage2/`
+- [x] T089 Create `scripts/finetune/Modelfile` — Ollama Modelfile указывающий на базовую модель + LoRA адаптер; инструкции по `ollama create sr-stage2 -f Modelfile`
 
 ### Evaluation
 
-- [ ] T090 Create `scripts/finetune/eval_finetune.py` — прогнать MI сценарии из `tests/security/mi_scenarios.py` на base Qwen3-4B и на fine-tuned; сравнить ASR; assert fine-tuned ASR ≤ 5%; распечатать таблицу `{model, ASR, structured_output_validity%}`
-- [ ] T091 Update `sr_agent/config.py` — добавить `SR_STAGE2_MODEL=sr-stage2` как default после успешного fine-tuning; fallback на `qwen3:4b` если `sr-stage2` не найден в Ollama
+- [x] T090 Create `scripts/finetune/eval_finetune.py` — прогнать MI сценарии из `tests/security/mi_scenarios.py` на base Qwen3-4B и на fine-tuned; сравнить ASR; assert fine-tuned ASR ≤ 5%; распечатать таблицу `{model, ASR, structured_output_validity%}`
+- [x] T091 Update `sr_agent/config.py` — добавить `SR_STAGE2_MODEL=sr-stage2` как default после успешного fine-tuning; fallback на `qwen3:4b` если `sr-stage2` не найден в Ollama
 
 **Checkpoint**: `python scripts/finetune/eval_finetune.py` показывает ASR fine-tuned ≤ 5% vs base ~85%; `ollama list` содержит `sr-stage2`.
 
