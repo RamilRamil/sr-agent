@@ -191,8 +191,8 @@
 ### Local LLM + Knowledge Base
 
 - [X] T057 Create `sr_agent/llm_core/local_client.py` — LocalClient calls Ollama (/api/generate) via stdlib urllib; analyze_target parses output through the SHARED relay adapter (adapt_findings) so a local model and Claude produce findings identically (external_llm_output). run_stage2_local runs synchronously (no pause). ModelUnavailableError on unreachable Ollama; per-target skip on failure
-- [ ] T058 [SUPERSEDED BY RELAY] `file_bridge.py` reader — folded into Phase 8A `relay.py` `ingest_response` (RLY1): reads `relay/responses/{id}.json`, `source_type=external_llm_output`. Cryptographic tamper-check N/A under manual relay (the human transport is the trust boundary); schema validation + all guardrails still apply
-- [ ] T059 Create `sr_agent/memory/knowledge.py` — `KnowledgeBase.search(query, category, top_k) -> list[KnowledgeChunk]`: query-expansion via `qmd-17B` local call, embedding via `gemma-300M`, reranker via `qwen-reranker-0.6b`; reads from `knowledge/` directory tree
+- [X] T058 [SUPERSEDED BY RELAY] `file_bridge.py` reader — folded into Phase 8A `relay.py` `ingest_response` (RLY1): reads `relay/responses/{id}.json`, `source_type=external_llm_output`. Cryptographic tamper-check N/A under manual relay (the human transport is the trust boundary); schema validation + all guardrails still apply
+- [X] T059 Create `sr_agent/memory/knowledge.py` — `KnowledgeBase.search(query, category, top_k) -> list[KnowledgeChunk]`: query-expansion via `qmd-17B` local call, embedding via `gemma-300M`, reranker via `qwen-reranker-0.6b`; reads from `knowledge/` directory tree
 
 ### On-Chain Tools
 
