@@ -4,9 +4,17 @@ Phase 0 decisions. Each: Decision / Rationale / Alternatives considered.
 
 ## R1 — Invocation mechanism
 
-**Decision**: Invoke SmartGraphical as an **external tool that emits JSON** — primary path is its
-CLI (`python sg_cli.py <file> all auditor json`); the `smartgraphical:local` Docker image is the
-sandboxed equivalent. SR-agent shells out and parses stdout JSON, exactly like `run_slither`.
+**Decision**: Invoke SmartGraphical as an **external tool that emits JSON** via a subprocess that
+calls its `web_api` facade (one-liner: `analyze_all(...)` + `graph(...)` → `json.dumps`). The
+`smartgraphical:local` Docker image is the sandboxed equivalent. SR-agent shells out and parses
+stdout JSON, like `run_slither`.
+
+**Implementation note (discovered while validating)**: `sg_cli.py … json` emits only a *summary*
+(no `findings[]`) and pollutes stdout with a graphviz warning, so it is **not** consumable. The
+`web_api.analyze_all` / `web_api.graph` facade returns clean JSON-safe dicts WITH the full
+`findings` array and the `{nodes, edges}` graph. We therefore drive the facade from a subprocess
+running SmartGraphical's own interpreter. SR-agent config: `SR_SMARTGRAPHICAL_ROOT` (project dir)
+and the interpreter at `<root>/.venv/bin/python` (overridable), or the Docker image.
 
 **Rationale**: Mirrors the proven Slither pattern; adds **zero** Python dependency to SR-agent;
 keeps the engine swappable and version-pinned behind a stable JSON contract; SmartGraphical's
