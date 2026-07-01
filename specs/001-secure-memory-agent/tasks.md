@@ -16,12 +16,12 @@
 
 **Purpose**: Project initialization and development environment
 
-- [ ] T001 Create Python project structure per `sr_agent/` layout in plan.md: `sr_agent/`, `tests/`, `knowledge/`, `scripts/`, `memory/`, `eval/`
-- [ ] T002 Create `pyproject.toml` with Python 3.11+ requirement, dependencies: `anthropic`, `web3`, `pydantic`, `click`, `docker`, `cryptography`, `langfuse`; dev deps: `pytest`, `ruff`
-- [ ] T003 [P] Create `Dockerfile.slither` and `Dockerfile.mythril` sandbox images in `docker/` — no network, read-only mounts, 5 min timeout
-- [ ] T004 [P] Create `docker-compose.yml` — services: `sr-agent`, `ollama` (ollama/ollama, port 11434, volume ollama_models), `langfuse` (self-hosted, port 3000), `postgres` (langfuse backend), `clickhouse` (langfuse traces); Langfuse не имеет доступа к `memory/` — отдельные volumes
-- [ ] T005 [P] Create `.env.example` — добавить: `ANTHROPIC_API_KEY`, `ALCHEMY_API_KEY`, `TENDERLY_API_KEY`, `SR_SECRET_KEY`, `SR_MEMORY_ROOT`, `SR_KNOWLEDGE_ROOT`, `SR_STAGE1_MODEL`, `SR_STAGE2_MODEL`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST=http://langfuse:3000`
-- [ ] T006 [P] Create `sr_agent/config.py` — load env vars, validate required keys present on startup, expose typed config object; добавить `langfuse_enabled: bool` флаг (default: True если LANGFUSE_SECRET_KEY задан)
+- [X] T001 Create Python project structure per `sr_agent/` layout in plan.md: `sr_agent/`, `tests/`, `knowledge/`, `scripts/`, `memory/`, `eval/`
+- [X] T002 Create `pyproject.toml` with Python 3.11+ requirement, dependencies: `anthropic`, `web3`, `pydantic`, `click`, `docker`, `cryptography`, `langfuse`; dev deps: `pytest`, `ruff`
+- [X] T003 [P] Create `Dockerfile.slither` and `Dockerfile.mythril` sandbox images in `docker/` — no network, read-only mounts, 5 min timeout
+- [X] T004 [P] Create `docker-compose.yml` — services: `sr-agent`, `ollama` (ollama/ollama, port 11434, volume ollama_models), `langfuse` (self-hosted, port 3000), `postgres` (langfuse backend), `clickhouse` (langfuse traces); Langfuse не имеет доступа к `memory/` — отдельные volumes
+- [X] T005 [P] Create `.env.example` — добавить: `ANTHROPIC_API_KEY`, `ALCHEMY_API_KEY`, `TENDERLY_API_KEY`, `SR_SECRET_KEY`, `SR_MEMORY_ROOT`, `SR_KNOWLEDGE_ROOT`, `SR_STAGE1_MODEL`, `SR_STAGE2_MODEL`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST=http://langfuse:3000`
+- [X] T006 [P] Create `sr_agent/config.py` — load env vars, validate required keys present on startup, expose typed config object; добавить `langfuse_enabled: bool` флаг (default: True если LANGFUSE_SECRET_KEY задан)
 
 ---
 
@@ -31,14 +31,14 @@
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T007 Create `sr_agent/models/memory.py` — `MemoryRecord`, `SourceType`, `TrustLevel`, `TRUST_LEVELS`, `REQUIRES_HUMAN_CONFIRMATION` per data-model.md
-- [ ] T007 [P] Create `sr_agent/models/finding.py` — `Finding`, `FindingStatus`, `Severity`, `BastetTag` enum (46 tags), `PoCStatus` per data-model.md
-- [ ] T008 [P] Create `sr_agent/models/action.py` — `Action`, `ActionType`, `ActionClass`, `ValidationStatus`, `ValidationResult` per data-model.md
-- [ ] T009 [P] Create `sr_agent/models/audit.py` — `AuditInput`, `AuditSession`, `Principal`, `Stage1Report`, `Checkpoint`, `SkipReason` per data-model.md
-- [ ] T010 Create `sr_agent/memory/hmac.py` — `sign(record_fields: dict, secret_key: bytes) -> str` and `verify(record: MemoryRecord, secret_key: bytes) -> bool` using `hmac.HMAC-SHA256`; secret_key loaded from config, never exposed outside this module
-- [ ] T011 Create `sr_agent/tools/registry.py` — `TOOL_REGISTRY` dict with description string constants + `description_hash` (sha256); `verify_all_hashes()` called at orchestrator startup, raises `ToolTampered` on mismatch
-- [ ] T012 [P] Create `sr_agent/io/input_val.py` — `validate_filepath(path, root_dir)` checks exists + within root; `validate_eip55(address)` checksum validation; `validate_audit_input(AuditInput)` full input gate
-- [ ] T013 [P] Create `sr_agent/orchestrator/context.py` — `wrap_data(content: str, tool: str, path: str) -> str` produces `[DATA START tool=X path=Y]...[DATA END]`; `build_messages(session, knowledge_chunks, tool_output) -> list[Message]` respects per-model token limits from `CONTEXT_LIMITS`
+- [X] T007 Create `sr_agent/models/memory.py` — `MemoryRecord`, `SourceType`, `TrustLevel`, `TRUST_LEVELS`, `REQUIRES_HUMAN_CONFIRMATION` per data-model.md
+- [X] T007 [P] Create `sr_agent/models/finding.py` — `Finding`, `FindingStatus`, `Severity`, `BastetTag` enum (46 tags), `PoCStatus` per data-model.md
+- [X] T008 [P] Create `sr_agent/models/action.py` — `Action`, `ActionType`, `ActionClass`, `ValidationStatus`, `ValidationResult` per data-model.md
+- [X] T009 [P] Create `sr_agent/models/audit.py` — `AuditInput`, `AuditSession`, `Principal`, `Stage1Report`, `Checkpoint`, `SkipReason` per data-model.md
+- [X] T010 Create `sr_agent/memory/hmac.py` — `sign(record_fields: dict, secret_key: bytes) -> str` and `verify(record: MemoryRecord, secret_key: bytes) -> bool` using `hmac.HMAC-SHA256`; secret_key loaded from config, never exposed outside this module
+- [X] T011 Create `sr_agent/tools/registry.py` — `TOOL_REGISTRY` dict with description string constants + `description_hash` (sha256); `verify_all_hashes()` called at orchestrator startup, raises `ToolTampered` on mismatch
+- [X] T012 [P] Create `sr_agent/io/input_val.py` — `validate_filepath(path, root_dir)` checks exists + within root; `validate_eip55(address)` checksum validation; `validate_audit_input(AuditInput)` full input gate
+- [X] T013 [P] Create `sr_agent/orchestrator/context.py` — `wrap_data(content: str, tool: str, path: str) -> str` produces `[DATA START tool=X path=Y]...[DATA END]`; `build_messages(session, knowledge_chunks, tool_output) -> list[Message]` respects per-model token limits from `CONTEXT_LIMITS`
 
 **Checkpoint**: Models, HMAC, tool registry, input validation, and context wrapping ready. User story implementation can begin.
 
@@ -52,19 +52,19 @@
 
 ### Implementation
 
-- [ ] T014 [US1] Create `sr_agent/memory/models.py` — `MemoryRecord` Pydantic model with all fields from data-model.md; `Checkpoint` dataclass; HMAC field not settable by LLM (no default in schema exposed to LLM)
-- [ ] T015 [US1] Create `sr_agent/memory/episodic.py` — `write(project_id, target, content, source_type, tool, session_id, *, supersedes)`: validates status rules, computes HMAC, appends to `memory/{project_id}/{target}.jsonl`; `load(project_id, target)`: reads JSONL, verifies HMAC per record (silent drop on fail), applies supersedes chain
-- [ ] T016 [US1] Create `sr_agent/orchestrator/action.py` — `validate_action(action: Action) -> ValidationResult`: checks `action_type` in `TOOL_REGISTRY`, validates params against per-tool `ParameterSchema`, enforces reversibility classification; `ActionWhitelist` with READ_ONLY and WRITE_EXECUTE sets
-- [ ] T017 [US1] Create `sr_agent/orchestrator/checkpoint.py` — `save_checkpoint(session: AuditSession, stage: int) -> MemoryRecord`: orchestrator-constructed checkpoint (source_type=tool_output, tool=orchestrator); `load_checkpoint(project_id, session_id) -> AuditSession | None`
-- [ ] T018 [US1] Create `sr_agent/orchestrator/loop.py` — main ReAct loop: `run(session) -> AuditResult`; reads checkpoint, calls LLM, validates `AgentAction` schema, dispatches to tool or memory write, saves checkpoint after each stage completion; never passes raw memory to LLM without `wrap_data`
-- [ ] T019 [US1] Create `sr_agent/llm_core/router.py` — `ModelRouter.route(task_type) -> LLMClient`; reads `MODEL_CONFIG` from env; returns `ClaudeClient` or `LocalClient` instance
-- [ ] T020 [US1] Create `sr_agent/llm_core/claude_client.py` — `ClaudeClient.complete(messages, task_type, *, budget_tokens=8000) -> AgentAction`: calls `claude-opus-4-8` with `thinking={"type": "enabled", "budget_tokens": budget_tokens}`; validates response against `AgentAction` Pydantic schema; thinking always enabled for Stage 1/3 (not conditional)
-- [ ] T021 [US1] Create `sr_agent/guardrails/sanitize.py` — `sanitize(raw: str) -> SanitizeResult`: Unicode normalization (homoglyphs → ASCII via `unicodedata`), detect Base64 blocks + Morse patterns + zero-width chars, return `{normalized: str, flags: list[str]}`; flags added to `[DATA]` header, content NOT blocked
-- [ ] T022 [US1] Create `sr_agent/cli.py` — `sr-agent audit` command skeleton using Click: parses `PATH_OR_ADDRESS`, `--path`, `--address`, `--project-id`, `--resume`; constructs `AuditInput`, validates via `validate_audit_input`, creates `AuditSession`, calls `orchestrator.loop.run(session)`
-- [ ] T023 [US1] Add unit tests in `tests/unit/test_hmac.py` — sign → verify roundtrip; tampered field → verify fails; different secret_key → verify fails
-- [ ] T024 [US1] Add unit tests in `tests/unit/test_episodic_memory.py` — write + load roundtrip; tampered JSONL → record dropped silently; status gate (only human_input sets verified_safe); supersedes chain resolution
-- [ ] T025 [US1] Add unit tests in `tests/unit/test_action_validation.py` — tool in whitelist passes; unknown tool rejected; invalid FilePath param rejected; WRITE_EXECUTE classified correctly
-- [ ] T026 [US1] Add integration test in `tests/integration/test_memory_as_data.py` — inject instruction-like record, run agent loop, assert no autonomous action was taken based on record content alone; assert record appeared in context wrapped in `[DATA]`
+- [X] T014 [US1] Create `sr_agent/memory/models.py` — `MemoryRecord` Pydantic model with all fields from data-model.md; `Checkpoint` dataclass; HMAC field not settable by LLM (no default in schema exposed to LLM)
+- [X] T015 [US1] Create `sr_agent/memory/episodic.py` — `write(project_id, target, content, source_type, tool, session_id, *, supersedes)`: validates status rules, computes HMAC, appends to `memory/{project_id}/{target}.jsonl`; `load(project_id, target)`: reads JSONL, verifies HMAC per record (silent drop on fail), applies supersedes chain
+- [X] T016 [US1] Create `sr_agent/orchestrator/action.py` — `validate_action(action: Action) -> ValidationResult`: checks `action_type` in `TOOL_REGISTRY`, validates params against per-tool `ParameterSchema`, enforces reversibility classification; `ActionWhitelist` with READ_ONLY and WRITE_EXECUTE sets
+- [X] T017 [US1] Create `sr_agent/orchestrator/checkpoint.py` — `save_checkpoint(session: AuditSession, stage: int) -> MemoryRecord`: orchestrator-constructed checkpoint (source_type=tool_output, tool=orchestrator); `load_checkpoint(project_id, session_id) -> AuditSession | None`
+- [X] T018 [US1] Create `sr_agent/orchestrator/loop.py` — main ReAct loop: `run(session) -> AuditResult`; reads checkpoint, calls LLM, validates `AgentAction` schema, dispatches to tool or memory write, saves checkpoint after each stage completion; never passes raw memory to LLM without `wrap_data`
+- [X] T019 [US1] Create `sr_agent/llm_core/router.py` — `ModelRouter.route(task_type) -> LLMClient`; reads `MODEL_CONFIG` from env; returns `ClaudeClient` or `LocalClient` instance
+- [X] T020 [US1] Create `sr_agent/llm_core/claude_client.py` — `ClaudeClient.complete(messages, task_type, *, budget_tokens=8000) -> AgentAction`: calls `claude-opus-4-8` with `thinking={"type": "enabled", "budget_tokens": budget_tokens}`; validates response against `AgentAction` Pydantic schema; thinking always enabled for Stage 1/3 (not conditional)
+- [X] T021 [US1] Create `sr_agent/guardrails/sanitize.py` — `sanitize(raw: str) -> SanitizeResult`: Unicode normalization (homoglyphs → ASCII via `unicodedata`), detect Base64 blocks + Morse patterns + zero-width chars, return `{normalized: str, flags: list[str]}`; flags added to `[DATA]` header, content NOT blocked
+- [X] T022 [US1] Create `sr_agent/cli.py` — `sr-agent audit` command skeleton using Click: parses `PATH_OR_ADDRESS`, `--path`, `--address`, `--project-id`, `--resume`; constructs `AuditInput`, validates via `validate_audit_input`, creates `AuditSession`, calls `orchestrator.loop.run(session)`
+- [X] T023 [US1] Add unit tests in `tests/unit/test_hmac.py` — sign → verify roundtrip; tampered field → verify fails; different secret_key → verify fails
+- [X] T024 [US1] Add unit tests in `tests/unit/test_episodic_memory.py` — write + load roundtrip; tampered JSONL → record dropped silently; status gate (only human_input sets verified_safe); supersedes chain resolution
+- [X] T025 [US1] Add unit tests in `tests/unit/test_action_validation.py` — tool in whitelist passes; unknown tool rejected; invalid FilePath param rejected; WRITE_EXECUTE classified correctly
+- [ ] T026 [US1] Add integration test in `tests/integration/test_memory_as_data.py` — inject instruction-like record, run agent loop, assert no autonomous action was taken based on record content alone; assert record appeared in context wrapped in `[DATA]` (property is covered piecemeal by `test_full_audit.py`/`test_relay.py`/`mi_scenarios.py`, but this dedicated file doesn't exist yet)
 
 **Checkpoint**: Agent loop runs with validated memory wrapping. US1 acceptance scenarios pass.
 
@@ -80,16 +80,16 @@
 
 ### Implementation
 
-- [ ] T027 [US2] Create `sr_agent/guardrails/severity.py` — `check_severity(finding: Finding) -> SeverityVerdict`: conjunction check (ANY mitigation → severity ≤ medium; ≥4 preconditions + no mitigations → severity ≥ high); logs correction reason if override applied
-- [ ] T028 [US2] Create `sr_agent/guardrails/escalation.py` — `evaluate_triggers(action, record, finding, session) -> EscalationResult`: evaluates all 8 `ESCALATION_TRIGGERS` from research.md; returns `{triggered: bool, trigger_name: str, detail: str}`
-- [ ] T029 [P] [US2] Create `tests/security/fixtures/malicious_memories.jsonl` — 5 HMAC-signed malicious records (signed with test secret_key): (1) exfil via claimed past destination, (2) skip_analysis status claim, (3) false safe verdict, (4) combined exfil+verdict, (5) cross-session record from wrong principal
-- [ ] T030 [P] [US2] Create `tests/security/fixtures/trigger_queries.txt` — corresponding 5 trigger queries that activate each malicious record
-- [ ] T031 [US2] Create `tests/security/mi_scenarios.py` — `AttackScenario` dataclass; `SCENARIOS` list of 5 scenarios matching fixtures; `run_scenario(scenario, protected=True) -> ScenarioResult`; `measure_asr(scenarios, protected) -> float`
-- [ ] T032 [US2] Create `tests/security/test_mi_resistance.py` — `test_protection_asr_below_5pct`: injects malicious records, runs trigger queries, asserts 0 successful attacks; `test_baseline_asr_above_40pct`: same without protection, asserts ≥3/5 succeed; `test_differential_40pp`: asserts gap ≥ 40 percentage points
-- [ ] T033 [US2] Extend `sr_agent/llm_core/claude_client.py` — verify `budget_tokens` is always set and never zero for stage1/stage3 (add assertion at call site); add `thinking_trajectory: str` to response for test inspection
-- [ ] T034 [US2] Create `sr_agent/cli.py` `demo-attack` command — runs all `SCENARIOS` with and without protection, prints structured report per contracts/cli.md format; exits 0 if ASR=0, exits 1 if any attack succeeded
-- [ ] T035 [US2] Create `scripts/demo_attack.sh` — one-line: `sr-agent demo-attack "$@"`; chmod +x
-- [ ] T036 [US2] Add unit tests in `tests/unit/test_conjunction_check.py` — mitigation present → severity overridden to medium; 4 active preconditions + no mitigations → severity corrected to high; no override when severity already correct
+- [X] T027 [US2] Create `sr_agent/guardrails/severity.py` — `check_severity(finding: Finding) -> SeverityVerdict`: conjunction check (ANY mitigation → severity ≤ medium; ≥4 preconditions + no mitigations → severity ≥ high); logs correction reason if override applied
+- [X] T028 [US2] Create `sr_agent/guardrails/escalation.py` — `evaluate_triggers(action, record, finding, session) -> EscalationResult`: evaluates all 8 `ESCALATION_TRIGGERS` from research.md; returns `{triggered: bool, trigger_name: str, detail: str}`
+- [X] T029 [P] [US2] Create `tests/security/fixtures/malicious_memories.jsonl` — 5 HMAC-signed malicious records (signed with test secret_key): (1) exfil via claimed past destination, (2) skip_analysis status claim, (3) false safe verdict, (4) combined exfil+verdict, (5) cross-session record from wrong principal
+- [X] T030 [P] [US2] Create `tests/security/fixtures/trigger_queries.txt` — corresponding 5 trigger queries that activate each malicious record
+- [X] T031 [US2] Create `tests/security/mi_scenarios.py` — `AttackScenario` dataclass; `SCENARIOS` list of 5 scenarios matching fixtures; `run_scenario(scenario, protected=True) -> ScenarioResult`; `measure_asr(scenarios, protected) -> float`
+- [X] T032 [US2] Create `tests/security/test_mi_resistance.py` — `test_protection_asr_below_5pct`: injects malicious records, runs trigger queries, asserts 0 successful attacks; `test_baseline_asr_above_40pct`: same without protection, asserts ≥3/5 succeed; `test_differential_40pp`: asserts gap ≥ 40 percentage points
+- [ ] T033 [US2] Extend `sr_agent/llm_core/claude_client.py` — verify `budget_tokens` is always set and never zero for stage1/stage3 (add assertion at call site); add `thinking_trajectory: str` to response for test inspection (thinking is always enabled with a default `budget_tokens=8000`, but there's no explicit call-site assertion and no `thinking_trajectory` field yet)
+- [X] T034 [US2] Create `sr_agent/cli.py` `demo-attack` command — runs all `SCENARIOS` with and without protection, prints structured report per contracts/cli.md format; exits 0 if ASR=0, exits 1 if any attack succeeded
+- [X] T035 [US2] Create `scripts/demo_attack.sh` — one-line: `sr-agent demo-attack "$@"`; chmod +x
+- [X] T036 [US2] Add unit tests in `tests/unit/test_conjunction_check.py` — mitigation present → severity overridden to medium; 4 active preconditions + no mitigations → severity corrected to high; no override when severity already correct
 
 **Checkpoint**: `sr-agent demo-attack` passes. SC-001, SC-002, SC-007, SC-008 verified.
 
@@ -221,23 +221,23 @@
 
 ### Langfuse Setup & Tracing
 
-- [ ] T074 Verify Langfuse запущен через `docker-compose up langfuse` — открыть `http://localhost:3000`, создать проект `sr-agent`, сохранить `LANGFUSE_SECRET_KEY` и `LANGFUSE_PUBLIC_KEY` в `.env`
-- [ ] T075 Create `sr_agent/eval/tracer.py` — тонкая обёртка над Langfuse SDK: `Tracer.trace(name, session_id)` → context manager возвращающий `LangfuseTrace`; `Tracer.generation(trace, name, model, input, output, usage)` → логирует один LLM вызов; если `LANGFUSE_SECRET_KEY` не задан — no-op (graceful degradation)
-- [ ] T076 Extend `sr_agent/llm_core/claude_client.py` — обернуть `complete()` в `Tracer.generation()`: логировать model, input_messages, AgentAction output, usage tokens, latency; thinking_excerpt (первые 500 chars) как metadata
-- [ ] T077 Extend `sr_agent/llm_core/local_client.py` — то же самое для Qwen3-4B вызовов
-- [ ] T078 Add integration test `tests/integration/test_langfuse_isolation.py` — `test_langfuse_not_in_memory_context`: запустить аудит, убедиться что Langfuse traces не загружаются в `episodic.load()` и не попадают в LLM context (Langfuse — отдельный сервис, не часть агентной памяти)
+- [X] T074 Langfuse запущен через `docker-compose up` (fully headless, no browser step): `docker-compose.yml` upgraded from the broken/EOL `langfuse/langfuse:2` image (incompatible with the installed `langfuse` SDK v4's OTel-based ingestion — confirmed via a live 404 on `/api/public/otel/v1/traces`) to `langfuse/langfuse:3` + `langfuse-worker:3`, adding the now-required `langfuse-redis` (queue) and `langfuse-minio` (S3-compatible event/media store) services per the official langfuse/langfuse docker-compose.yml. Project `sr-agent`, org, and admin user are auto-created on first boot via `LANGFUSE_INIT_*` env vars (`.env`, gitignored; template in `.env.example`) — verified end-to-end: `Langfuse().auth_check()` returns `True` and a real trace+generation round-tripped through `POST /api/public/otel/v1/traces` and was read back via `GET /api/public/traces/{id}`
+- [X] T075 Create `sr_agent/eval/tracer.py` — тонкая обёртка над Langfuse SDK: `Tracer.trace(name, session_id)` → context manager возвращающий `LangfuseTrace`; `Tracer.generation(trace, name, model, input, output, usage)` → логирует один LLM вызов; если `LANGFUSE_SECRET_KEY` не задан — no-op (graceful degradation). Deliberately does not import `sr_agent.config` (leaf module, stays importable in unit tests); orchestrator/CLI threads a real `Tracer` through as a parameter (same pattern as `smartgraphical_root`)
+- [X] T076 Extend `sr_agent/llm_core/claude_client.py` — обернуть `complete()` в `Tracer.generation()`: логировать model, input_messages, AgentAction output, usage tokens, latency; thinking_excerpt (первые 500 chars) как metadata; added `assert budget_tokens > 0` at the call site. NOTE: this client is currently unused by the live pipeline (Stage 1/3 are deterministic, Stage 2 goes through relay/local — see `research/relay-architecture.md`), so instrumentation is future-proofing, not yet exercised in production traces
+- [X] T077 Extend `sr_agent/llm_core/local_client.py` — то же самое для Qwen3-4B вызовов (`analyze_target`, wired through `run_stage2_local` → `pipeline.start_audit(tracer=...)` → `cli.py` builds the real `Tracer` from config); this IS the live traced path today
+- [X] T078 Add integration test `tests/integration/test_langfuse_isolation.py` — disabled/no-op tracer is safe; tracer module has zero `sr_agent.memory`/`sr_agent.config` imports (AST-checked); Stage 2 local findings written to memory are byte-identical whether a tracer is wired in or not (Langfuse never touches the audit trail)
 
 ### Prompt Management
 
-- [ ] T079 Создать промпты Stage 1, Stage 2, Stage 3 в Langfuse UI (Prompt Management) — версия v1; обновить `claude_client.py` и `local_client.py` чтобы загружать промпты через `langfuse.get_prompt("stage1-discovery")` вместо хардкоженных строк в коде
+- [X] T079 Prompts pushed programmatically (`Langfuse().create_prompt()`, no UI step — Stage 1/3 don't have a distinct LLM prompt today since `stage1.py`/`stage3.py` are the deterministic relay variant; the two real prompts are `claude-react-system` from `claude_client.py` — the shared ReAct system prompt for whichever stage drives `ClaudeClient.complete()` — and `stage2-local-analysis` from `local_client.py`, the live Stage 2 prompt), label `production`, v1. Added `Tracer.get_prompt(name, fallback)` (graceful: returns the hardcoded fallback if disabled/fetch fails, verified against both a real and a missing prompt name) and wired both clients to call it through the `tracer` param they already receive — no new function parameters
 
 ### Eval Dataset & Regression
 
-- [ ] T080 [P] Create `eval/contracts/` — 5 контрактов из Damn Vulnerable DeFi с известными уязвимостями; `eval/contracts/README.md` с источником и CVE
-- [ ] T081 [P] Create `eval/dataset.py` — `EvalCase` + `EvalCriterion` dataclasses; загрузить кейсы в Langfuse Datasets через SDK (`langfuse.create_dataset("sr-agent-eval")`)
-- [ ] T082 Create `eval/runner.py` — `run_eval(dataset_name) -> EvalReport`: прогоняет кейсы через `sr-agent audit`; постит scores в Langfuse через `langfuse.score()`; считает `recall@known_vulns`, `FPR`, `loop_completion_rate` детерминированным кодом
-- [ ] T083 Create `eval/regression.py` — сравнивает текущий run с baseline по порогам (`recall ≥ 0.80`, `FPR ≤ 0.20`, `ASR ≤ 0.05`, `loop_completion ≥ 0.95`); `save_baseline()` помечает run как baseline в Langfuse
-- [ ] T084 Add `Makefile` targets: `make eval` (прогон + regression check), `make traces` (открыть Langfuse UI в браузере)
+- [X] T080 [P] Create `eval/contracts/` — 5 контрактов из Damn Vulnerable DeFi с известными уязвимостями; `eval/contracts/README.md` с источником и CVE. Реальные файлы (verbatim) из `theredguild/damn-vulnerable-defi` (MIT): truster, side-entrance, unstoppable, naive-receiver (2 находки), the-rewarder. DVD не использует CVE-нумерацию — README ссылается на upstream challenge page вместо CVE; внешние зависимости (solady/solmate/@openzeppelin) НЕ vendored (Stage 1 regex-based SIG и LLM-движки работают на тексте без компиляции; Slither/Mythril best-effort авто-skip на unresolved imports — принятый компромисс)
+- [X] T081 [P] Create `eval/dataset.py` — `EvalCase` + `EvalCriterion` dataclasses; `push_dataset()` грузит кейсы в Langfuse Datasets через SDK (`langfuse.create_dataset`/`create_dataset_item`). Жёсткая зависимость от `langfuse` (`from langfuse import Langfuse` на верхнем уровне) — решение подтверждено явно, в отличие от graceful no-op в `sr_agent/eval/tracer.py`
+- [X] T082 Create `eval/runner.py` — `run_eval(...) -> EvalReport`: гоняет `EVAL_CASES` через реальный `pipeline.start_audit` (`stage2_provider="local"` — relay интерактивен и не годится для батч-eval); recall/FPR/loop_completion_rate считаются детерминированным Python-кодом (см. докстринг модуля за точными формулами — FPR тут не классический, так как нет true negatives); `_push_scores()` постит per-case + summary scores в Langfuse (`client.trace()`/`create_score()`, hard dependency)
+- [X] T083 Create `eval/regression.py` — `check_thresholds()`/`compare_to_baseline()` против порогов (`recall ≥ 0.80`, `FPR ≤ 0.20`, `ASR ≤ 0.05`, `loop_completion ≥ 0.95`); `save_baseline()`. NOTE: baseline истины хранится в локальном `eval/baseline.json`, не через Langfuse query — Langfuse'овские read-API (dataset runs / scores v2 vs v3/v4) слишком версионно-хрупкие для CI-гейта; `save_baseline()` всё равно best-effort зеркалит baseline в Langfuse как `<dataset>-baseline` trace для видимости в UI
+- [X] T084 Add `Makefile` targets: `make eval` (прогон + regression check, `SKIP_LANGFUSE=1` для локального прогона без Langfuse), `make traces` (открыть Langfuse UI в браузере). Только эти два таргета — `test`/`test-unit`/`test-security`/`demo` относятся к T071 (Phase 11, не запрошено)
 
 **Checkpoint**: Langfuse UI показывает трейсы каждого LLM вызова; промпты версионированы; `make eval` считает recall/FPR и сравнивает с baseline.
 

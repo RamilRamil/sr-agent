@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 from sr_agent.memory.episodic import EpisodicMemory
 from sr_agent.models.audit import AuditSession
 from sr_agent.models.finding import Finding
@@ -148,12 +149,14 @@ def run_stage2_local(
     memory: EpisodicMemory,
     client,
     context_provider: ContextProvider,
+    tracer: Tracer = NOOP_TRACER,
 ) -> Stage2Result:
     """Synchronous Stage 2 via a local model (Ollama) — no relay, no pause.
 
     Each target is analyzed in one shot; findings are written to memory as
     external_llm_output (automation != authoring). A target whose model call
-    fails is skipped, not fatal.
+    fails is skipped, not fatal. `tracer` (default: no-op) logs each call as a
+    Langfuse generation for observability; it never touches episodic memory.
     """
     from sr_agent.llm_core.local_client import ModelUnavailableError, analyze_target
 
@@ -161,7 +164,10 @@ def run_stage2_local(
     analyzed = 0
     for target in targets:
         try:
-            result = analyze_target(client, target, context_provider(target))
+            result = analyze_target(
+                client, target, context_provider(target),
+                tracer=tracer, session_id=session.session_id,
+            )
         except ModelUnavailableError as e:
             logger.warning("Local Stage 2 skipped %s: %s", target, e)
             continue
