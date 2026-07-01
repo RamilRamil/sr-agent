@@ -14,9 +14,13 @@ Its logic findings appear in the report attributed to the `smartgraphical` engin
 Slither and Mythril. The interference graph used by Stage 3 is built from SmartGraphical's
 structural model when available.
 
-Disable the engine:
+Enable the engine by pointing SR-agent at a SmartGraphical checkout:
 ```
-sr-agent audit ./contracts --no-smartgraphical      # (flag added in implementation)
+export SR_SMARTGRAPHICAL_ROOT=/path/to/SmartGraphical   # uses <root>/.venv/bin/python
+```
+Disable the engine for a run:
+```
+sr-agent audit ./contracts --no-smartgraphical
 ```
 
 ## What you should see

@@ -70,9 +70,9 @@
 
 ## Phase 6: Polish & Cross-Cutting
 
-- [ ] T017 [P] Add `--no-smartgraphical` flag to `sr-agent audit` (and a `run_smartgraphical` pipeline param) so the engine can be disabled; default keeps existing behavior working (FR-010, SC-003)
-- [ ] T018 [P] Update `docs`/README + `.env.example` (SmartGraphical path / image name) and the quickstart verification commands
-- [ ] T019 Run the full suite (`pytest tests/` excluding slow mythril) + a live `sr-agent audit` smoke with all engines; confirm SmartGraphical findings + engine attribution in the report
+- [X] T017 [P] Add `--no-smartgraphical` flag to `sr-agent audit` (and a `run_smartgraphical` pipeline param) so the engine can be disabled; default keeps existing behavior working (FR-010, SC-003)
+- [X] T018 [P] Update `docs`/README + `.env.example` (SmartGraphical path / image name) and the quickstart verification commands
+- [X] T019 Run the full suite (`pytest tests/` excluding slow mythril) + a live `sr-agent audit` smoke with all engines; confirm SmartGraphical findings + engine attribution in the report
 
 ---
 

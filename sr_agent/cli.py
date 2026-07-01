@@ -22,6 +22,7 @@ def cli() -> None:
 @click.option("--exclude", multiple=True, type=click.Path(), help="Paths to exclude")
 @click.option("--focus", multiple=True, type=click.Path(), help="Restrict to these files")
 @click.option("--no-imports", is_flag=True, help="Exclude OpenZeppelin/library imports from SIG")
+@click.option("--no-smartgraphical", is_flag=True, help="Disable the SmartGraphical engine")
 @click.option("--output", "-o", type=click.Path(), default="audit-report.md")
 @click.option("--project-id", default=None, help="Override project ID (default: derived from path)")
 @click.option("--resume", "--resume-session", default=None, help="Resume a session by ID")
@@ -32,6 +33,7 @@ def audit(
     exclude: tuple[str, ...],
     focus: tuple[str, ...],
     no_imports: bool,
+    no_smartgraphical: bool,
     output: str,
     project_id: str | None,
     resume: str | None,
@@ -79,6 +81,7 @@ def audit(
         )
         sys.exit(2)
 
+    from sr_agent.eval.tracer import Tracer
     from sr_agent.io.progress import ProgressStream
     from sr_agent.memory.episodic import EpisodicMemory
     from sr_agent.orchestrator.pipeline import start_audit
@@ -86,11 +89,17 @@ def audit(
     memory = EpisodicMemory(config.memory_root, config.secret_key)
     relay_dir = config.relay_root
     runs_dir = config.relay_root / "runs"
+    tracer = Tracer(
+        secret_key=config.langfuse_secret_key,
+        public_key=config.langfuse_public_key,
+        host=config.langfuse_host,
+    )
 
     result = start_audit(
         audit_input, audit_path, memory, relay_dir, runs_dir,
         output=output, progress=ProgressStream(), stage2_provider="auto",
-        smartgraphical_root=config.smartgraphical_root,
+        smartgraphical_root="" if no_smartgraphical else config.smartgraphical_root,
+        tracer=tracer,
     )
 
     if result.status == "paused":
