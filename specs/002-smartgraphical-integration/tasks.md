@@ -61,8 +61,8 @@
 
 **Independent Test**: Ingest a SmartGraphical finding; assert provenance `tool_output`, status unconfirmed, message sanitized, no privileged status set.
 
-- [ ] T015 [P] [US3] Tests `tests/integration/test_smartgraphical_invariant.py` — a SmartGraphical finding (incl. one with a manipulative-looking message + zero-width char) ingests as `tool_output`, status not `confirmed`, notes sanitized (flags present), and a relayed-style `verified_safe` cannot ride in via the engine path (SC-004)
-- [ ] T016 [US3] Verify report engine-attribution is present for every finding across all engines (Slither/Mythril/SmartGraphical/model) — assertion test over a mixed report (SC-005)
+- [X] T015 [P] [US3] Tests `tests/integration/test_smartgraphical_invariant.py` — a SmartGraphical finding (incl. one with a manipulative-looking message + zero-width char) ingests as `tool_output`, status not `confirmed`, notes sanitized (flags present), and a relayed-style `verified_safe` cannot ride in via the engine path (SC-004)
+- [X] T016 [US3] Verify report engine-attribution is present for every finding across all engines (Slither/Mythril/SmartGraphical/model) — assertion test over a mixed report (SC-005)
 
 **Checkpoint**: SC-004/SC-005 — hypothesis invariant + full provenance verified.
 
