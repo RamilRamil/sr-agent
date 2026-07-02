@@ -73,3 +73,27 @@ Every question here was resolved by reading the existing codebase, not by pickin
 **Rationale**: No new tool logic needed — this is the same gap the rest of the plan keeps finding: correct, tested building blocks that were never connected to the loop that's supposed to call them.
 
 **Alternatives considered**: None — this one wasn't a design choice, just confirming there's no missing primitive.
+
+## R10 — `LocalClient.available()` only checks `/api/tags`. Is that enough to decide "local model unavailable" for FR-011? (kernel)
+
+**Decision**: No — split liveness from readiness. `available()` (GET `/api/tags`: server reachable + model pulled) is *liveness* and a wedged Ollama passes it. Add `LocalClient.ready()` — a minimal generate probe (`num_predict=1`, short timeout ~10–15s) that actually exercises the inference path. FR-011's "unavailable" MUST mean "fails `ready()`", not "fails `available()`". The `active → blocked_local_unavailable` transition fires on `not ready()`.
+
+**Rationale**: This was found empirically — a real Ollama instance (38h uptime) served `/api/tags` fine while every `generate` hung; a batch job that trusted `available()` queued 22 items that all timed out. Reachability ≠ readiness. This is a **kernel** correctness fix (task-agnostic: any capability pack routing to the local model needs it), and it is exactly what makes FR-011's refuse-and-wait actually trigger instead of hanging. Generation timeout is also raised: measured ~7–8 min/PoC on `qwen2.5-coder:3b` (442s / 500s), so the per-generation timeout is ≥600s, not the old 180s default (the direct cause of the observed `write_failed` timeouts).
+
+**Alternatives considered**: Making `available()` itself do the deep probe. Rejected — liveness is cheap and called often (e.g. routing every turn); a 10–15s generate probe on every turn is wasteful. Keep the cheap check for routing, use the deep probe at the FR-011 decision point.
+
+## R11 — How does a PoC written by chat mode actually run under Foundry, given it lands in `audit/poc/`? (audit-pack)
+
+**Decision**: A dedicated **Foundry profile**, not a second `foundry.toml`. The target's default `foundry.toml` has `src='contracts'`, `test='test'` — `forge test` only discovers/compiles tests under the `test` dir, so a PoC in `audit/poc/` is never compiled ("No tests to run"), and `--match-path` alone can't fix it (it filters already-discovered tests). The audit pack MUST run PoCs via a `poc` profile (or the `FOUNDRY_TEST=audit/poc` env override) that keeps `src`/`libs`/remappings and inherits `via_ir=true` (Strata's contracts need it — turning it off risks stack-too-deep). Generator (local/relay model) output is data: written to `audit/poc/`, executed only inside `DockerSandbox`. Full mechanics in [contracts/poc-execution.md](contracts/poc-execution.md).
+
+**Rationale**: This is **audit-pack** knowledge (Foundry-specific), not a kernel concern — it belongs on the pack side of the Principle-III boundary, and it is the first concrete gotcha the human has confirmed reproducible (a seed entry for the future experiential-knowledge loop). A second `foundry.toml` as an alternate project root breaks relative `src`/`lib`/remappings — rejected. `via_ir=true` inheritance costs slow compiles; accepted (compile once, cache).
+
+**Alternatives considered**: (a) Write PoCs under `test/audit-poc/` — simplest, no config, but violates the user's explicit "PoCs go to `audit/`". (b) A separate `audit/foundry.toml` project root — breaks imports/remappings. Both rejected in favor of the profile/env-override.
+
+## R12 — Should the findings list be materialized into a roadmap/progress artifact? (kernel mechanism + audit-pack content)
+
+**Decision**: Yes, but memory-backed and mechanical-status-only. PoC progress is recorded as append-only `MemoryRecord` **status events** (`tool_output` tier, orchestrator-authored) under the session/project target key — the signed episodic memory is the source of truth; a human-readable `.md` roadmap table is a regenerable *view*, never a parallel hand-maintained store. Status vocabulary is strictly mechanical: `pending → written → compiled → passed | failed | errored | skipped(+reason)`. It MUST NOT carry security verdicts: "test passed" means a reproduction exists, NOT "finding confirmed/safe" — a verdict change stays a `REQUIRES_HUMAN_CONFIRMATION` action. Every finding AND every lead gets a row; a skip is an explicit row with a reason, never a silent omission (enforces the no-lead-prefiltering rule). Feeds `SessionFacts.known_finding_ids` (grounding, FR-009) and resume (FR-012).
+
+**Rationale**: We already did this ad-hoc (`poc_queue.json` + `_runner_progress.jsonl`); formalizing it closes FR-009/FR-012 and the no-prefiltering rule at once. Memory-backed (not a loose working file) so the progress record is tamper-evident like everything else — a mutable progress file would be exactly the state store an attacker would edit. The *mechanism* (status events over `EpisodicMemory` + rendered view) is **kernel**; the *content* (audit findings/leads) is **audit-pack**.
+
+**Alternatives considered**: A standalone `roadmap.md`/`.json` working file as the source of truth. Rejected — second, unsigned state store outside the HMAC memory; drifts from memory and is trivially forgeable, which is the class of attack the whole project defends against.

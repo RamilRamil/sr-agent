@@ -34,7 +34,15 @@ No new trust primitives, no new action types, no new storage technology — this
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-`.specify/memory/constitution.md` is the unfilled template — no project-specific principles or gates have been ratified for this repository. There is nothing to check against beyond the security invariants already stated directly in the spec (DATA-wrapping, out-of-band confirmation, trust-tier preservation) and enforced by the existing code this plan reuses. No constitution-derived gate violations to justify.
+Checked against constitution v1.0.0 (ratified 2026-07-02). This feature is effectively the reference implementation of the kernel principles, and passes each:
+
+- **I. Secure-Kernel Trust Invariants** — reuses `context.wrap_data` (DATA on every turn), the `SourceType` hierarchy, HMAC `EpisodicMemory`, and adds the per-turn tool budget (R4); R7 fixes a trust-tier bug (`llm_inference` → `external_llm_output`) rather than importing it. PASS.
+- **II. Human Authority** — reuses `validate_action`/`REQUIRES_OOB_CONFIRMATION`/`confirmation.py` unmodified; R8 confirms no soft-gate bypass; PoC `passed` never flips a finding verdict (poc-execution contract). PASS.
+- **III. Kernel/Pack Separation** — additions are placed by side: readiness probe R10 = kernel (`local_client.py`); PoC-execution R11 + roadmap-content R12 = audit-pack (`contracts/poc-execution.md`, not `loop.py`). No plugin registry (YAGNI). PASS.
+- **IV. Human-Gated Knowledge** — the roadmap (R12) records mechanical status only; no tool-output-derived observation self-promotes into steering knowledge. PASS.
+- **V. No Paid-API Dependency** — R2: local-first, relay on deterministic escalation only; `claude_client.py` untouched and unimported by the chat path. PASS.
+
+No violations to justify; Complexity Tracking omitted.
 
 ## Project Structure
 
@@ -48,7 +56,8 @@ specs/003-interactive-chat-mode/
 ├── quickstart.md         # Phase 1 output
 ├── contracts/            # Phase 1 output
 │   ├── cli-chat-command.md
-│   └── chat-turn-contract.md
+│   ├── chat-turn-contract.md
+│   └── poc-execution.md   # audit-pack: Foundry profile, audit/poc/ output, via_ir, status→roadmap
 └── tasks.md              # Phase 2 output (/speckit-tasks — not this command)
 ```
 

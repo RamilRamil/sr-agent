@@ -59,7 +59,7 @@ Maps to the spec's **Routing Decision** entity. Not persisted as its own record 
 
 | Field | Type | Notes |
 |---|---|---|
-| `tier` | `"local" \| "relay" \| "blocked_local_unavailable"` | R2/R11: never a third silent-fallback tier — `blocked_local_unavailable` is a terminal-for-this-turn state, not something that becomes `relay` automatically. |
+| `tier` | `"local" \| "relay" \| "blocked_local_unavailable"` | R2/R10: never a third silent-fallback tier — `blocked_local_unavailable` is a terminal-for-this-turn state, not something that becomes `relay` automatically. |
 | `escalation_trigger` | `EscalationTrigger \| None` (existing enum, reused) | Set when `evaluate_triggers()` (R3) or the model's own self-report fired — whichever fired first is recorded; both being independently checkable is what makes this auditable. |
 | `escalation_source` | `"model_self_report" \| "deterministic_guard" \| None` | Which of the two (R3) actually caused escalation — useful for auditing whether the deterministic guard is the one doing the real work, which is the intended design. |
 
@@ -72,6 +72,22 @@ Maps to part of the spec's **Turn** entity (tool calls within a turn). Not a new
 | `action` | `Action` (existing model, reused) | |
 | `validation_result` | `ValidationResult` (existing model, reused) | Output of `validate_action` — approved/rejected + reason. |
 | `result_summary` | `str` | The DATA-wrapped (`wrap_data`) tool output as actually fed back into the next model call — persisted so a resumed session can reconstruct exactly what the model saw, not just what happened. |
+
+## PoCStatusEvent (findings roadmap, R12)
+
+The memory-backed progress record. Each event is an append-only `MemoryRecord` (`tool_output` tier, orchestrator-authored) under the session/project target key; the source of truth is signed episodic memory, and the human-readable roadmap table is a regenerable *view* over these events (never a parallel store). Kernel mechanism; audit-pack content.
+
+| Field | Type | Notes |
+|---|---|---|
+| `finding_id` | `str` | The finding OR lead this row tracks. Every finding AND every lead gets one — no silent omission (no-lead-prefiltering rule). |
+| `status` | `"pending" \| "written" \| "compiled" \| "passed" \| "failed" \| "errored" \| "skipped"` | Strictly mechanical PoC lifecycle. `passed` = "a reproduction exists", NOT "finding confirmed/safe". |
+| `skip_reason` | `str \| None` | REQUIRED when `status == "skipped"` (e.g. `"floor-gated, out of scope"`) — a skip is an explicit reasoned row, never absence. |
+| `poc_path` | `str \| None` | `audit/poc/<ident>.t.sol` once `written`. |
+| `source_type` | `SourceType` | `tool_output` — orchestrator-authored from a real tool result, never `human_input`. |
+
+**Validation rules**:
+- `status` transitions only within the mechanical lifecycle; it MUST NOT encode a security verdict. Flipping a finding to `verified_safe`/`audit_complete` is a separate `REQUIRES_HUMAN_CONFIRMATION` action, not a roadmap status.
+- A `PoCStatusEvent` write MUST originate from the orchestrator (from `run_tests`/`write_poc` result handling), never from parsing model output — same trust property as `SessionFacts` (R6/R12).
 
 ## ConsequentialActionNotice
 
@@ -89,7 +105,7 @@ Maps to the spec's **Consequential Action Notice** entity. Per R8, this is not a
 ```text
 active ──(agent_action requires OOB confirmation)──> paused_confirmation
 active ──(evaluate_triggers or self-report escalation)──> paused_relay
-active ──(LocalClient.available() == False mid-turn)──> blocked_local_unavailable
+active ──(LocalClient.ready() == False mid-turn — deep generate-probe, not just available(), R10)──> blocked_local_unavailable
 
 paused_confirmation ──(sr-agent confirm --approve, session resumed)──> active
 paused_confirmation ──(sr-agent confirm --reject / timeout, session resumed)──> active
