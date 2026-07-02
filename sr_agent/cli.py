@@ -562,3 +562,7 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
             )
             break
     sys.exit(0)
+
+
+if __name__ == "__main__":
+    cli()

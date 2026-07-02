@@ -1,6 +1,8 @@
 # Architecture overview — what's actually wired up
 
-Two distinct things live in this codebase: (1) the **live batch-audit path**, reachable from the `sr-agent` CLI today, and (2) a **built-but-orphaned agent loop** (`orchestrator/loop.py` + friends) that nothing currently calls. The chat-mode spec (`specs/003-interactive-chat-mode/`) is meant to wire (2) up properly — it isn't built yet.
+> **Update (feature 003 MVP built):** `orchestrator/loop.py` is **no longer orphaned** — `sr-agent chat` now wires it via `run_turn` + an injected `ChatReasoningProvider` (local-first, no paid API). The "ORPHAN" framing below described the pre-003 state; the loop, `validate_action`, `confirmation.py`, `context.wrap_data`, and `guardrails/escalation.py::evaluate_triggers` are all now reached through the chat path. See [chat-turn-flow.md](chat-turn-flow.md) for the wired flow. The batch-audit path (Stage 1/3 via `ClaudeClient`) remains the one still-unwired consumer of `run()`.
+
+Two distinct things live in this codebase: (1) the **live batch-audit path**, reachable from the `sr-agent` CLI today, and (2) the **agent loop** (`orchestrator/loop.py` + friends) — orphaned before feature 003, now wired by `sr-agent chat`.
 
 ```mermaid
 flowchart TB
