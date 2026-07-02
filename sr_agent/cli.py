@@ -480,7 +480,8 @@ def relay_cmd(request_id: str | None, show: bool, respond_file: str | None, list
 @click.argument("project_or_path", required=False)
 @click.option("--resume", "resume_session", default=None, help="Resume a chat session by id")
 @click.option("--project-id", default=None, help="Override/select project id")
-def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id: str | None) -> None:
+@click.option("--model", "model", default=None, help="Local Ollama model override (default: for_stage2 resolution)")
+def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id: str | None, model: str | None) -> None:
     """Interactive chat bound to one project (feature 003).
 
     Local-first; escalates to relay only on a deterministic trigger, never as a
@@ -528,8 +529,9 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
         principal=principal,
         audit_input=AuditInput(path=audit_root, principal=principal),
     )
+    local_client = LocalClient(model=model) if model else LocalClient.for_stage2()
     provider = ChatReasoningProvider(
-        local=LocalClient.for_stage2(), session=audit_session, relay_dir=config.relay_root,
+        local=local_client, session=audit_session, relay_dir=config.relay_root,
     )
     loop = OrchestratorLoop(
         audit_session, memory, audit_root,
