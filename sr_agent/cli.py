@@ -76,9 +76,13 @@ def handle_turn(loop, session, memory, user_message: str):
     from sr_agent.orchestrator.chat_session import save_turn, update_facts
 
     result = loop.run_turn(user_message, system_prompt="")
-    # Grounding facts are orchestrator-authored from real results, never model text.
+    # Grounding facts are orchestrator-authored from real results, never model text
+    # (US4/R6): known findings + a bounded trail of what's already been looked at,
+    # so a long investigation session stays coherent past the model's window.
     for finding in result.findings:
         update_facts(session, finding_id=finding.finding_id)
+    for summary in result.tool_summaries:
+        update_facts(session, tool_summary=summary)
 
     session.status = _STATUS_TO_SESSION.get(result.status, "active")
     session.pending_confirmation_id = result.pending_confirmation_id
