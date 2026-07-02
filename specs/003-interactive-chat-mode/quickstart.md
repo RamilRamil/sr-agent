@@ -6,12 +6,14 @@ Same environment as any other `sr-agent` command:
 
 ```bash
 cd /Users/ramilmustafin/Claude/Projects/SR-agent
-export ANTHROPIC_API_KEY=dummy   # unused by chat mode itself — required only because
-                                  # config.load_config() still hard-requires it today
 export SR_SECRET_KEY=$(python3 -c "import secrets;print(secrets.token_hex(32))")
+# ANTHROPIC_API_KEY is NOT required for chat (T027) — the loop runs on the local
+# model / relay only. Set it only if you also use the paid ClaudeClient audit path.
 ```
 
-Ollama running with a pulled model (`qwen2.5-coder:3b` or `sr-stage2` once fine-tuned) — chat mode refuses turns outright when this isn't available (FR-011), it does not degrade to relay-only automatically.
+Ollama running with a pulled model — `for_stage2()` prefers `sr-stage2`, then `qwen3:4b`, then falls back to whatever base model is pulled (`qwen2.5-coder:3b`). Chat refuses turns outright when none is ready (FR-011); it does not degrade to relay-only automatically.
+
+**Model-quality caveat (from a live smoke):** `qwen2.5-coder:3b` runs CPU-only here (~20 s cold load, seconds per short turn) and is **unreliable at the tool-selection contract** — e.g. it may answer "please provide the path" instead of emitting a `read_file` with the path from your message. The chat *infrastructure* is correct end-to-end; for dependable tool use on a real codebase, use a stronger local model (7B+) or let the escalation path carry the hard turns. Cold-load can also exceed the 15 s readiness probe — warm the model once (`ollama run <model> ok`) before a session, or expect the first turn to report `blocked` and retry.
 
 ## Starting a session
 
