@@ -36,7 +36,16 @@ Already has spec/plan/tasks/analyze + I1/C1/C2 fixes. Fold in, placing each on t
 Setup + Foundational + US1 (Q&A chat). This is also what first *wires* the orphaned `orchestrator/loop.py` — i.e. the kernel becomes real. While implementing, respect the seam (Phase-4 prep): new chat code in kernel-appropriate places; PoC/roadmap bits pack-tagged, not hardwired into `loop.py`.
 
 ### Phase 4 — Spec 004: kernel ↔ capability-pack boundary
-Incremental refactor extracting audit-specifics (concrete `ActionType` values, `tools/{static_analysis,smartgraphical,write_execute,onchain}`, `planner/stage*`, `models/finding`, privileged-status set `{verified_safe, skip_analysis, audit_complete}`) behind a documented pack interface. One pack, no registry. Comes AFTER 003-impl so the real seam (learned by wiring the loop) informs it, not a speculative one.
+**Status: fully SPEC'D (spec+plan+tasks+analyze committed `85049a0`), implementation DEFERRED.** We pause before implementing to first validate the agent's *workability* on a real task (PoC-writing for the pashov findings) — the near-term priority — rather than invest the multi-hour refactor up front.
+
+Design locked to **Target A (full seam)**: introduce one declarative `CapabilityPack` the kernel consumes by injection; relocate audit-specifics under `sr_agent/packs/audit/`; enforce the boundary with a directory-based import check (`no kernel module imports sr_agent.packs` → 0). One pack, no dynamic registry (wired explicitly in `cli.py`; YAGNI). 35 tasks, 7 phases, sequenced so **US2 (the "a pack cannot lower a guardrail" security property) lands first** with green checkpoints throughout.
+
+Load-bearing decisions (see `specs/004-kernel-pack-boundary/research.md` R1–R12):
+- **Confirmation is kernel-derived from `action_class`** (write_execute ⇒ confirm), never a pack-declared flag — the pack has no lever to skip the OOB gate.
+- Pack callables get a narrow `PackContext`, not the loop (least privilege).
+- `AgentAction.finding` → opaque `dict` keeps the model JSON wire-shape unchanged → behavior-preserving.
+- `Principal` relocates to a kernel module (kills the memory→audit coupling — it was just a mislocated generic type); `AuditSession` factors into a kernel `Session` protocol + audit extension.
+- Confirmed while reading the code: `context.py`'s `AuditSession` import was a *dead* type hint; the real audit-policy bleed into the kernel is in `guardrails/escalation.py` (triggers #3–#7) and `orchestrator/{loop,action}.py`.
 
 ### Phase 5 — Spec 005: experiential knowledge loop
 Capture-always → reactive candidate queue (`sr-agent lessons` list/show/approve/dismiss, mirroring `sr-agent confirm`) → human command promotes → embed (HMAC-signed; pack content) → retrieve-at-build as **suggestion, not control** (v1). Dedup by error-signature to keep the human queue low-noise. Mechanism = kernel; content = pack. Depends on Phase 4 + solid memory/knowledge subsystem.
@@ -46,8 +55,11 @@ Two gotchas the human has already confirmed reproducible — the seed entries fo
 1. **Foundry test discovery** — `forge test` only discovers tests under the configured `test` dir; PoCs in `audit/poc/` need `FOUNDRY_TEST`/profile or they're never compiled ("No tests to run"). Keep `via_ir=true`.
 2. **Local model latency** — `qwen2.5-coder:3b` ≈ 8 min/PoC on this hardware; set generation timeout ≥600s; prefer relay for real PoC drafts.
 
+## Current focus (2026-07): validate PoC-writing workability
+Before implementing Phase 4, test whether the agent can draft a proof-of-code for **all** findings in the pashov audit report (`<strata-bb>/audit/contracts-pashov-ai-audit-report-*.md`). Include ALL findings — no prefiltering (a prior audit missed a vuln from exactly that assumption). This exercises the `write_poc`→`run_tests` path (feature 003 `execute_confirmed`, Foundry `audit/poc/` profile) end-to-end on real contracts.
+
 ## Open questions (deferred, not blocking)
-- Pack interface exact shape (Phase 4 detail).
-- PoC-drafting default: relay vs local (evidence leans relay for real drafts).
-- Disposition of the current 22-item PoC batch (rerun slow vs park).
+- Pack interface exact shape — **RESOLVED** in Spec 004 (Target A; `CapabilityPack` frozen dataclass + `PackContext`, see research.md).
+- PoC-drafting default: relay vs local (evidence leans relay for real drafts; the workability test above will add data).
+- Disposition of the current 22-item PoC batch (rerun slow vs park) — folded into the workability test.
 - Reactive-queue vs inline-in-chat surfacing for Phase 5 (leaning: reactive queue core, inline later).
