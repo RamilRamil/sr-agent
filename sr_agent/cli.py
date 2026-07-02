@@ -46,10 +46,13 @@ def format_reply(result) -> str:
     if result.status == "blocked_local_unavailable":
         return "[blocked] local model unavailable — turn not processed. Re-run --resume once it's back (no relay fallback)."
     if result.status == "paused_confirmation":
+        what = result.pending_action_type or "action"
+        params = result.pending_action_params or {}
         return (
-            f"[{tier}] requesting out-of-band confirmation (id {result.pending_confirmation_id}). "
-            f"Run `sr-agent confirm {result.pending_confirmation_id} --approve` in another terminal, "
-            f"then `sr-agent chat --resume <session_id>`."
+            f"[{tier}] will run {what} {params} — pending out-of-band confirmation "
+            f"(id {result.pending_confirmation_id}). Approve with "
+            f"`sr-agent confirm {result.pending_confirmation_id} --approve`, then "
+            f"`sr-agent chat --resume <session_id>`."
         )
     if result.status == "paused_relay":
         return (
@@ -91,6 +94,51 @@ def handle_turn(loop, session, memory, user_message: str):
     )
     save_turn(session, turn, memory)
     return result
+
+
+def resume_confirmation(loop, session, memory) -> str:
+    """Ingest a resolved OOB confirmation and finish the paused write_execute (US2/T018).
+
+    Approved → reconstruct the action from the confirmation record and dispatch it
+    (the ONLY path that runs it — approval never happens in a model turn). Records
+    a mechanical PoC status event (never a verdict). Rejected/timeout → not executed.
+    """
+    from sr_agent.models.action import Action, ActionType
+    from sr_agent.orchestrator.action import validate_action
+    from sr_agent.orchestrator.chat_session import record_poc_status, save_session, update_facts
+    from sr_agent.orchestrator.confirmation import load_request
+
+    cid = session.pending_confirmation_id
+    if not cid:
+        return "no pending confirmation on this session."
+    try:
+        payload = load_request(cid, loop._confirmations_dir)
+    except FileNotFoundError:
+        return f"confirmation {cid} not found."
+
+    status = payload.get("status", "pending")
+    if status == "pending":
+        return f"confirmation {cid} still pending — approve/reject out-of-band first."
+
+    if status != "approved":
+        session.status = "active"
+        session.pending_confirmation_id = None
+        save_session(session, memory)
+        return f"confirmation {cid} was {status} — action not executed."
+
+    # Approved: rebuild + re-validate the action, then execute out-of-band-gated.
+    action = Action(action_type=ActionType(payload["action_type"]), params=payload.get("params", {}))
+    validate_action(action, loop._audit_root)   # re-annotate class/reversibility
+    action.human_confirmation = True
+    summary, event = loop.execute_confirmed(action)
+    if event is not None:
+        record_poc_status(session, event, memory)
+        update_facts(session, tool_summary=f"{event.status}: {event.finding_id}")
+
+    session.status = "active"
+    session.pending_confirmation_id = None
+    save_session(session, memory)
+    return summary
 
 
 @cli.command()
@@ -456,10 +504,9 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
         principal = session.principal
         derived_pid = principal.project_id
         audit_root = Path(".")
-        if session.status != "active":
-            # Paused-state resume (confirmation/relay ingest) lands in US2/US3;
-            # for now report the pending item and continue the REPL.
-            click.echo(f"note: session status is {session.status!r} — full paused-resume is not wired yet.")
+        if session.status in ("paused_relay", "blocked_local_unavailable"):
+            # relay/local resume ingest lands in a later phase.
+            click.echo(f"note: {session.status!r} resume is not wired yet — continuing as a fresh turn.")
     else:
         if not project_or_path:
             click.echo("A project id or path is required (or use --resume).", err=True)
@@ -487,6 +534,11 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
         confirmations_dir=config.confirmations_root,
     )
     provider.existing_findings = loop._findings  # share for evaluate_triggers (R3)
+
+    # Resuming a session paused on an OOB confirmation: ingest the decision and
+    # finish (or cancel) the write_execute before accepting new input (T018).
+    if resume_session and session.status == "paused_confirmation":
+        click.echo(resume_confirmation(loop, session, memory))
 
     click.echo(f"chat session {session.session_id} (project {derived_pid}). Ctrl-D to quit.")
     while True:
