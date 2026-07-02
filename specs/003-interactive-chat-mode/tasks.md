@@ -89,8 +89,8 @@ Single Python package `sr_agent/` with `tests/` at repo root (existing project l
 
 **Independent Test**: Ask for a write_execute action; confirm it never runs pre-approval; approve→runs, reject→doesn't, timeout→doesn't.
 
-- [ ] T019 [US3] Create `tests/integration/test_chat_confirmation.py`: assert (a) a `write_execute` chat turn writes a pending confirmation and executes nothing before approval (SC-003), (b) approve → action proceeds, (c) reject → not executed, (d) timeout → not executed (fail-safe), reusing `orchestrator/confirmation.py`'s existing semantics.
-- [ ] T020 [US3] Add a guard test in `tests/unit/test_orchestrator_loop_chat.py` asserting there is NO code path in `loop.py`/`cli.py` that sets `action.human_confirmation = True` for a `write_execute` action without a corresponding approved confirmation record (contract: no "trust me" bypass, mirrors the shortcut `poc_queue_runner.py` took and must not be repeated).
+- [x] T019 [US3] Create `tests/integration/test_chat_confirmation.py`: assert (a) a `write_execute` chat turn writes a pending confirmation and executes nothing before approval (SC-003), (b) approve → action proceeds, (c) reject → not executed, (d) timeout → not executed (fail-safe), reusing `orchestrator/confirmation.py`'s existing semantics.
+- [x] T020 [US3] Add a guard test in `tests/unit/test_orchestrator_loop_chat.py` asserting there is NO code path in `loop.py`/`cli.py` that sets `action.human_confirmation = True` for a `write_execute` action without a corresponding approved confirmation record (contract: no "trust me" bypass, mirrors the shortcut `poc_queue_runner.py` took and must not be repeated).
 
 **Checkpoint**: The hard safety property is proven by test — feature is safe to use for PoC work.
 
