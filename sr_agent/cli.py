@@ -15,6 +15,84 @@ def cli() -> None:
     """SR-agent: memory-injection-resistant smart contract auditor."""
 
 
+# ── chat mode helpers (feature 003) — module-level so tests import without the REPL ──
+
+_STATUS_TO_SESSION = {
+    "completed": "active",
+    "budget_exhausted": "active",
+    "paused_confirmation": "paused_confirmation",
+    "paused_relay": "paused_relay",
+    "blocked_local_unavailable": "blocked_local_unavailable",
+}
+
+
+def _facts_to_str(facts) -> str | None:
+    """Render orchestrator-authored grounding facts for the model prompt (R6)."""
+    if facts is None:
+        return None
+    parts = [f"bound_project={facts.project_id}"]
+    if facts.known_finding_ids:
+        parts.append("known_findings=" + ",".join(facts.known_finding_ids))
+    if facts.recent_tool_summaries:
+        parts.append("recent=" + " | ".join(facts.recent_tool_summaries))
+    return "; ".join(parts)
+
+
+def format_reply(result) -> str:
+    """Render a turn result for the user, always surfacing the routing tier (FR-010/SC-006)."""
+    tier = result.routing.tier if result.routing else "local"
+    if result.status == "completed":
+        return f"[{tier}] {result.answer}"
+    if result.status == "blocked_local_unavailable":
+        return "[blocked] local model unavailable — turn not processed. Re-run --resume once it's back (no relay fallback)."
+    if result.status == "paused_confirmation":
+        return (
+            f"[{tier}] requesting out-of-band confirmation (id {result.pending_confirmation_id}). "
+            f"Run `sr-agent confirm {result.pending_confirmation_id} --approve` in another terminal, "
+            f"then `sr-agent chat --resume <session_id>`."
+        )
+    if result.status == "paused_relay":
+        return (
+            f"[relay] escalated to the manual relay (request {result.relay_request_id}). "
+            f"Run `sr-agent relay --show {result.relay_request_id}`, answer via Claude, "
+            f"`sr-agent relay --respond`, then `sr-agent chat --resume <session_id>`."
+        )
+    return f"[{tier}] {result.answer}"
+
+
+def handle_turn(loop, session, memory, user_message: str):
+    """Run one chat turn and persist it. Returns the TurnResult.
+
+    Separated from the click REPL so it's testable with a fake reasoning
+    provider (no stdin, no real Ollama).
+    """
+    from datetime import datetime
+
+    from sr_agent.models.chat import ChatTurn
+    from sr_agent.models.memory import SourceType
+    from sr_agent.orchestrator.chat_session import save_turn, update_facts
+
+    result = loop.run_turn(user_message, system_prompt="")
+    # Grounding facts are orchestrator-authored from real results, never model text.
+    for finding in result.findings:
+        update_facts(session, finding_id=finding.finding_id)
+
+    session.status = _STATUS_TO_SESSION.get(result.status, "active")
+    session.pending_confirmation_id = result.pending_confirmation_id
+    session.pending_relay_request_id = result.relay_request_id
+
+    turn = ChatTurn(
+        session_id=session.session_id,
+        user_message=user_message,
+        routing_decision=result.routing,
+        agent_action=None,
+        source_type=SourceType.external_llm_output,
+        completed_at=datetime.utcnow() if result.status == "completed" else None,
+    )
+    save_turn(session, turn, memory)
+    return result
+
+
 @cli.command()
 @click.argument("path_or_address", required=False)
 @click.option("--path", "-p", type=click.Path(), help="Path to .sol files directory")
@@ -344,3 +422,87 @@ def relay_cmd(request_id: str | None, show: bool, respond_file: str | None, list
 
     click.echo("Specify one of --show / --respond <file> / --list.", err=True)
     sys.exit(2)
+
+
+@cli.command("chat")
+@click.argument("project_or_path", required=False)
+@click.option("--resume", "resume_session", default=None, help="Resume a chat session by id")
+@click.option("--project-id", default=None, help="Override/select project id")
+def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id: str | None) -> None:
+    """Interactive chat bound to one project (feature 003).
+
+    Local-first; escalates to relay only on a deterministic trigger, never as a
+    fallback for an unavailable local model. Irreversible actions still route
+    through `sr-agent confirm` — the chat cannot bypass the gate.
+    """
+    from sr_agent.llm_core.chat_reasoning import ChatReasoningProvider
+    from sr_agent.llm_core.local_client import LocalClient
+    from sr_agent.memory.episodic import EpisodicMemory
+    from sr_agent.models.chat import ChatSession
+    from sr_agent.orchestrator.chat_session import load_session, save_session
+    from sr_agent.orchestrator.loop import OrchestratorLoop
+
+    memory = EpisodicMemory(config.memory_root, config.secret_key)
+
+    if resume_session:
+        pid = project_id or project_or_path
+        if not pid:
+            click.echo("--resume requires --project-id (or the project positional).", err=True)
+            sys.exit(2)
+        session = load_session(resume_session, pid, memory)
+        if session is None:
+            click.echo(f"Error: chat session {resume_session!r} not found for project {pid!r}.", err=True)
+            sys.exit(2)
+        principal = session.principal
+        derived_pid = principal.project_id
+        audit_root = Path(".")
+        if session.status != "active":
+            # Paused-state resume (confirmation/relay ingest) lands in US2/US3;
+            # for now report the pending item and continue the REPL.
+            click.echo(f"note: session status is {session.status!r} — full paused-resume is not wired yet.")
+    else:
+        if not project_or_path:
+            click.echo("A project id or path is required (or use --resume).", err=True)
+            sys.exit(2)
+        p = Path(project_or_path)
+        if p.exists() and p.is_dir():
+            audit_root, derived_pid = p, (project_id or p.name)
+        else:
+            audit_root, derived_pid = Path("."), (project_id or project_or_path)
+        principal = Principal(user_id="cli-user", platform="cli", project_id=derived_pid)
+        session = ChatSession(principal=principal)
+        save_session(session, memory)
+
+    audit_session = AuditSession(
+        principal=principal,
+        audit_input=AuditInput(path=audit_root, principal=principal),
+    )
+    provider = ChatReasoningProvider(
+        local=LocalClient.for_stage2(), session=audit_session, relay_dir=config.relay_root,
+    )
+    loop = OrchestratorLoop(
+        audit_session, memory, audit_root,
+        reasoning_provider=provider,
+        session_facts_provider=lambda: _facts_to_str(session.session_facts),
+        confirmations_dir=config.confirmations_root,
+    )
+    provider.existing_findings = loop._findings  # share for evaluate_triggers (R3)
+
+    click.echo(f"chat session {session.session_id} (project {derived_pid}). Ctrl-D to quit.")
+    while True:
+        try:
+            user_message = click.prompt("you", prompt_suffix="> ")
+        except (EOFError, click.exceptions.Abort):
+            click.echo("")
+            break
+        if not user_message.strip():
+            continue
+        result = handle_turn(loop, session, memory, user_message)
+        click.echo(format_reply(result))
+        if result.status in ("paused_confirmation", "paused_relay", "blocked_local_unavailable"):
+            click.echo(
+                f"(session paused — resume with "
+                f"`sr-agent chat --resume {session.session_id} --project-id {derived_pid}`)"
+            )
+            break
+    sys.exit(0)
