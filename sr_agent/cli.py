@@ -541,6 +541,15 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
     )
     provider.existing_findings = loop._findings  # share for evaluate_triggers (R3)
 
+    # Warm the local model once so the first turn's readiness probe doesn't fail on
+    # a cold load (a larger model can take minutes to load on CPU).
+    click.echo(f"warming {local_client.model} (first load can take a few minutes on CPU)…")
+    if not local_client.warm():
+        click.echo(
+            f"note: {local_client.model} not ready — the first turn may report "
+            "'blocked'; it recovers automatically once the model is up."
+        )
+
     # Resuming a session paused on an OOB confirmation: ingest the decision and
     # finish (or cancel) the write_execute before accepting new input (T018).
     if resume_session and session.status == "paused_confirmation":
