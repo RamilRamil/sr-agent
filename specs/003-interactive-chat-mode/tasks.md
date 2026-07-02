@@ -126,7 +126,7 @@ Single Python package `sr_agent/` with `tests/` at repo root (existing project l
 ## Phase 8: Polish & Cross-Cutting
 
 - [ ] T026 [P] Update `docs/diagrams/architecture-overview.md` (loop.py is now WIRED, not orphaned) and add a chat-turn flow diagram; update `docs/diagrams/README.md`.
-- [ ] T027 [P] Make `ANTHROPIC_API_KEY` optional in `sr_agent/config.py` (chat mode needs no paid API; today `_require` forces a dummy) — small correctness fix noted in quickstart, guard so non-chat paths that DO need it still error clearly.
+- [x] T027 [P] Make `ANTHROPIC_API_KEY` optional in `sr_agent/config.py` (chat mode needs no paid API; today `_require` forces a dummy) — small correctness fix noted in quickstart, guard so non-chat paths that DO need it still error clearly.
 - [ ] T028 Run `specs/003-interactive-chat-mode/quickstart.md` end-to-end against a real project + Ollama; fix any drift.
 - [ ] T029 Run the full suite `PYTHONPATH=. .venv/bin/python -m pytest tests/ -q` (excluding live-only integration), confirm green, mark T001–T029 done.
 
