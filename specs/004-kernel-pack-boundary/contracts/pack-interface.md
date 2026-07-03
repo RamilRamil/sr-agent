@@ -19,13 +19,13 @@ A pack is a single frozen `CapabilityPack` value. It supplies exactly these, and
 9. **`domain_escalation(input)`** — the domain's finding-based escalation triggers.
 10. **`signal_from(agent_action)`** — extract the escalation signal a chat turn feeds to `domain_escalation`.
 
-Pack callables receive a narrow **`PackContext`** (`audit_root`, `sandbox`, `poc_dir`, `wrap_data`, `memory`) — never the loop, never kernel internals.
+Pack callables receive a narrow **`PackContext`** (`audit_root`, `sandbox`, `poc_dir`, `wrap_data`) — never the loop, never kernel internals, and **no memory handle**: a pack cannot write memory, so it structurally cannot forge a `human_input`-tier record. The pack *returns* domain artifacts; the kernel persists them with a kernel-set tier.
 
 ## What the kernel guarantees (a pack CANNOT alter any of these)
 
 - **DATA-wrapping** — every tool result and re-entering artifact is wrapped `[DATA START]..[DATA END]` and treated as untrusted; a pack's output goes through `wrap_data`, never raw into context.
 - **Trust hierarchy + no promotion** — `human_input > tool_output > external_llm_output > llm_inference`; a pack's output (and its model's output) is recorded no higher than `external_llm_output`/`tool_output` and is never promotable to `human_input`.
-- **HMAC append-only memory** — a pack writes through `EpisodicMemory`; it cannot forge tiers, backdate, or delete.
+- **HMAC append-only memory** — a pack has **no memory-write capability** (no handle in `PackContext`); the kernel performs every write with a kernel-set source tier, so a pack cannot forge a tier, backdate, or delete. A pack only returns artifacts for the kernel to persist.
 - **OOB confirmation gate** — the requirement is **kernel-derived from `action_class`** (`write_execute ⇒ confirm`) and from `privileged_statuses`; a pack cannot mark such an action/status as not-requiring-confirmation. No convenience surface bypasses it.
 - **Per-turn tool-call budget** — bounds every turn; a pack cannot raise or remove it.
 - **Whitelist + path-containment + sandbox** — every pack tool is validated against the registry, confined to `audit_root`, and (for attacker-influenced execution) run inside the network-isolated Docker sandbox; a pack cannot opt out. A missing/permissive `validate_params` fails **closed** — kernel defaults still apply.
