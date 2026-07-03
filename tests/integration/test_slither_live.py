@@ -10,7 +10,7 @@ import pytest
 from pathlib import Path
 
 from sr_agent.tools.sandbox import DockerSandbox
-from sr_agent.tools.static_analysis import run_slither
+from sr_agent.packs.audit.tools.static_analysis import run_slither
 
 
 def _slither_ready() -> bool:

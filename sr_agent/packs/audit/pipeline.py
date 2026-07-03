@@ -87,7 +87,7 @@ def _run_static_analysis(
     this is skipped silently — it enriches the audit, it does not gate it.
     """
     from sr_agent.tools.sandbox import DockerSandbox
-    from sr_agent.tools.static_analysis import run_slither, slither_to_findings
+    from sr_agent.packs.audit.tools.static_analysis import run_slither, slither_to_findings
 
     sandbox = DockerSandbox()
     written = 0
@@ -133,7 +133,7 @@ def _run_smartgraphical_analysis(
     if not sg_root:
         return 0, {}
     from sr_agent.guardrails.sanitize import sanitize as _sanitize
-    from sr_agent.tools.smartgraphical import run_smartgraphical, sg_to_findings
+    from sr_agent.packs.audit.tools.smartgraphical import run_smartgraphical, sg_to_findings
 
     written = 0
     graphs: dict[str, dict] = {}

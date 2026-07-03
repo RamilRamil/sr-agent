@@ -87,7 +87,7 @@
 - [ ] T021 [US1] Relocate `AuditSession`/`AuditInput`/`Stage1Report`/`Checkpoint` from `sr_agent/models/audit.py` → `sr_agent/packs/audit/session.py`; retype kernel call sites (`checkpoint.py`, `chat_session.py`, `context.py` drop the dead hint) to the `Session` protocol
 - [x] T022 [P] [US1] Relocate `sr_agent/planner/` → `sr_agent/packs/audit/planner/` and `sr_agent/orchestrator/pipeline.py` → `sr_agent/packs/audit/pipeline.py`; update importers
 - [ ] T023 [P] [US1] Relocate audit tools (`static_analysis.py`, `smartgraphical.py`, `onchain.py`, `write_execute.py`) → `sr_agent/packs/audit/tools/`; update importers (they run inside the kernel `DockerSandbox`, unchanged)
-- [ ] T024 [P] [US1] Relocate audit guardrails (`mock_detect.py`, `severity.py`) → `sr_agent/packs/audit/guardrails/` and `io/report.py`, `io/input_val.py` → `sr_agent/packs/audit/`; update importers
+- [x] T024 [P] [US1] Relocate audit guardrails (`mock_detect.py`, `severity.py`) → `sr_agent/packs/audit/guardrails/` and `io/report.py`, `io/input_val.py` → `sr_agent/packs/audit/`; update importers
 - [ ] T025 [US1] Move `local_client.py`'s audit `_PROMPT`/`build_analysis_prompt`/`analyze_target` to `sr_agent/packs/audit/reasoning.py`; keep `LocalClient` (generate/ready/warm/available) generic in the kernel
 
 ### Close the boundary

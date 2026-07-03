@@ -8,7 +8,7 @@ import os
 import pytest
 from pathlib import Path
 
-from sr_agent.tools.smartgraphical import run_smartgraphical
+from sr_agent.packs.audit.tools.smartgraphical import run_smartgraphical
 
 _SG_ROOT = os.environ.get("SR_SMARTGRAPHICAL_ROOT", "")
 

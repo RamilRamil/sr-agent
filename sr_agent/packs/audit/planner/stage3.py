@@ -20,7 +20,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from sr_agent.guardrails.severity import check_severity
+from sr_agent.packs.audit.guardrails.severity import check_severity
 from sr_agent.models.finding import Finding, Severity
 
 if TYPE_CHECKING:

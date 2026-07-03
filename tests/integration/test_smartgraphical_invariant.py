@@ -12,7 +12,7 @@ from sr_agent.memory.episodic import EpisodicMemory
 from sr_agent.models.audit import Principal
 from sr_agent.models.finding import FindingStatus
 from sr_agent.models.memory import MemoryRecord, SourceType
-from sr_agent.tools.smartgraphical import SGFinding, sg_to_findings
+from sr_agent.packs.audit.tools.smartgraphical import SGFinding, sg_to_findings
 
 SECRET = b"test-secret-key-32-bytes-exactly!"
 
