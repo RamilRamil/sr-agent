@@ -75,9 +75,9 @@
 
 ### Inversions (invert kernel consumers before moving modules — keeps green)
 
-- [ ] T015 [US1] Split `evaluate_triggers` in `sr_agent/guardrails/escalation.py`: keep generic triggers #1/#2/#8; move finding-based #3–#7 to `sr_agent/packs/audit/escalation.py::domain_escalation`; kernel calls generic → then `pack.domain_escalation` (order preserved, R5)
+- [x] T015 [US1] Split `evaluate_triggers` in `sr_agent/guardrails/escalation.py`: keep generic triggers #1/#2/#8; move finding-based #3–#7 to `sr_agent/packs/audit/escalation.py::domain_escalation`; kernel calls generic → then `pack.domain_escalation` (order preserved, R5)
 - [ ] T016 [US1] Invert loop execution: move `_dispatch`/`execute_confirmed`/`_persist_finding` bodies to `sr_agent/packs/audit/dispatch.py`; `orchestrator/loop.py` calls `pack.dispatch/execute_confirmed/persist_finding` with a narrow `PackContext`; kernel keeps the control flow + a built-in `read_file`/`search_code` default (R8)
-- [ ] T017 [US1] Split `ChatReasoningProvider` in `sr_agent/llm_core/chat_reasoning.py`: drop `models.finding`/`models.audit` imports; consume `pack.reasoning_prompt` + `pack.signal_from`; move the audit prompt + `_finding_from` to `sr_agent/packs/audit/reasoning.py` (R6)
+- [x] T017 [US1] Split `ChatReasoningProvider` in `sr_agent/llm_core/chat_reasoning.py`: drop `models.finding`/`models.audit` imports; consume `pack.reasoning_prompt` + `pack.signal_from`; move the audit prompt + `_finding_from` to `sr_agent/packs/audit/reasoning.py` (R6)
 - [ ] T018 [US1] Split the tool registry: keep `ToolDefinition`/`_hash`/`verify_all_hashes`/`ToolTampered` in `sr_agent/tools/registry.py`; move audit tool entries to `sr_agent/packs/audit/registry_entries.py`; verify kernel-builtins ∪ pack tools at loop start (R7)
 - [ ] T019 [US1] Extract audit `ActionType` + `ACTION_CLASS_MAP` + `REVERSIBLE` + per-action `validate_params` to `sr_agent/packs/audit/actions.py`; `sr_agent/models/action.py` keeps generic `Action`/`ActionClass`/`ValidationStatus`/`ValidationResult` + the kernel built-in action set (read_file, search_code, write_memory, request_human_confirmation, escalate)
 

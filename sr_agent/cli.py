@@ -494,6 +494,8 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
     from sr_agent.models.chat import ChatSession
     from sr_agent.orchestrator.chat_session import load_session, save_session
     from sr_agent.orchestrator.loop import OrchestratorLoop
+    from sr_agent.packs.audit.escalation import domain_escalation
+    from sr_agent.packs.audit.reasoning import AUDIT_CHAT_SYSTEM, signal_from
 
     memory = EpisodicMemory(config.memory_root, config.secret_key)
 
@@ -532,6 +534,8 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
     local_client = LocalClient(model=model) if model else LocalClient.for_stage2()
     provider = ChatReasoningProvider(
         local=local_client, session=audit_session, relay_dir=config.relay_root,
+        system_prompt=AUDIT_CHAT_SYSTEM, signal_from=signal_from,
+        domain_escalation=domain_escalation,
     )
     loop = OrchestratorLoop(
         audit_session, memory, audit_root,
