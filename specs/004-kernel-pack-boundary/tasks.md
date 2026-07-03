@@ -35,9 +35,9 @@
 
 **⚠️ CRITICAL**: blocks US1 and US2.
 
-- [ ] T004 [P] Define `CapabilityPack`, `ActionSpec`, `PackContext` frozen dataclasses in `sr_agent/orchestrator/pack.py` (kernel contract types) per data-model.md
-- [ ] T005 [P] Define the kernel `Session` `typing.Protocol` (session_id, principal, iterations, token_budget_used) in `sr_agent/models/session.py` per data-model.md (R4)
-- [ ] T006 Relocate `Principal` from `sr_agent/models/audit.py` to new kernel module `sr_agent/models/principal.py`; update all importers (`memory/episodic.py`, `io/*`, `models/chat.py`, `cli.py`, `models/audit.py`, …) — this alone removes the memory→audit coupling (R4)
+- [x] T004 [P] Define `CapabilityPack`, `ActionSpec`, `PackContext` frozen dataclasses in `sr_agent/orchestrator/pack.py` (kernel contract types) per data-model.md
+- [x] T005 [P] Define the kernel `Session` `typing.Protocol` (session_id, principal, iterations, token_budget_used) in `sr_agent/models/session.py` per data-model.md (R4)
+- [x] T006 Relocate `Principal` from `sr_agent/models/audit.py` to new kernel module `sr_agent/models/principal.py`; update all importers (`memory/episodic.py`, `io/*`, `models/chat.py`, `cli.py`, `models/audit.py`, …) — this alone removes the memory→audit coupling (R4)
 - [ ] T007 Loosen `AgentAction.finding` from `FindingPayload` to `dict | None` in `sr_agent/llm_core/schemas.py` (opaque payload; pack re-validates); keep the JSON wire-shape identical (R8/R11)
 - [ ] T008 Invert `validate_action` → `validate_action(action, audit_root, pack)` in `sr_agent/orchestrator/action.py`: consult `pack.actions[type]` for class/reversibility/`validate_params`; **DERIVE the OOB-confirmation requirement from `action_class == write_execute` (kernel rule, R2)**; keep whitelist + path-containment fail-closed even if a pack validator is absent/permissive
 - [ ] T009 Assemble an initial `AUDIT_PACK` in `sr_agent/packs/audit/pack.py` that sources the *current* audit definitions (action types, tool entries, dispatch wrapping existing loop logic, domain triggers, prompt) — pack→kernel imports only; lets the system run through the interface before relocation
