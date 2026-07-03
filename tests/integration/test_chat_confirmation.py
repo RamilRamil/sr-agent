@@ -10,10 +10,11 @@ from sr_agent.cli import handle_turn, resume_confirmation
 from sr_agent.llm_core.chat_reasoning import ReasoningOutcome
 from sr_agent.llm_core.schemas import AgentAction
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import AuditInput, AuditSession, Principal
+from sr_agent.packs.audit.session import AuditInput, AuditSession, Principal
 from sr_agent.models.chat import ChatSession
 from sr_agent.orchestrator.confirmation import resolve_confirmation
 from sr_agent.orchestrator.loop import OrchestratorLoop
+from sr_agent.packs.audit.pack import AUDIT_PACK
 from sr_agent.tools.sandbox import SandboxResult
 
 _KEY = bytes(range(32))
@@ -42,7 +43,7 @@ def _setup(tmp_path):
     aa = AgentAction(next_action="write_poc", tool_params={"finding_id": "F1"})
     loop = OrchestratorLoop(
         audit_session, memory, tmp_path,
-        reasoning_provider=FakeProvider(ReasoningOutcome(kind="action", agent_action=aa, tier="local")),
+        pack=AUDIT_PACK, reasoning_provider=FakeProvider(ReasoningOutcome(kind="action", agent_action=aa, tier="local")),
         confirmations_dir=tmp_path / "conf",
         sandbox=FakeSandbox(), poc_dir=tmp_path / "audit" / "poc",
     )

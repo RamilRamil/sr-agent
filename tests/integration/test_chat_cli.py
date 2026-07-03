@@ -17,10 +17,11 @@ from sr_agent.cli import cli, format_reply, handle_turn
 from sr_agent.llm_core.chat_reasoning import ReasoningOutcome
 from sr_agent.llm_core.schemas import AgentAction
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import AuditInput, AuditSession, Principal
+from sr_agent.packs.audit.session import AuditInput, AuditSession, Principal
 from sr_agent.models.chat import ChatSession, RoutingDecision
 from sr_agent.orchestrator.chat_session import load_turns
 from sr_agent.orchestrator.loop import OrchestratorLoop
+from sr_agent.packs.audit.pack import AUDIT_PACK
 
 _KEY = bytes(range(32))
 
@@ -52,7 +53,7 @@ def _setup(tmp_path, provider):
     )
     loop = OrchestratorLoop(
         audit_session, memory, tmp_path,
-        reasoning_provider=provider,
+        pack=AUDIT_PACK, reasoning_provider=provider,
         session_facts_provider=lambda: None,
         confirmations_dir=tmp_path / "conf",
     )

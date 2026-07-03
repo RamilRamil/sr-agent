@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from sr_agent.packs.audit.guardrails.severity import check_severity
-from sr_agent.models.finding import Finding, Severity
+from sr_agent.packs.audit.finding import Finding, Severity
 
 if TYPE_CHECKING:
     from sr_agent.packs.audit.planner.sig import StateInterferenceGraph

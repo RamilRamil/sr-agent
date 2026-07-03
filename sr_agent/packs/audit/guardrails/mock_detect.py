@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from sr_agent.models.finding import FindingStatus
+from sr_agent.packs.audit.finding import FindingStatus
 
 # Substring -> reason. Each indicates the test may not prove a real exploit.
 MOCK_PATTERNS: dict[str, str] = {

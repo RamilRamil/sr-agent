@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from sr_agent.guardrails.escalation import EscalationResult
 from sr_agent.llm_core.schemas import EscalationTrigger
-from sr_agent.models.finding import (
+from sr_agent.packs.audit.finding import (
     Finding, FindingStatus, PoCStatus, Severity,
 )
 

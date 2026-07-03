@@ -7,7 +7,7 @@ import click
 
 from sr_agent.config import config
 from sr_agent.packs.audit.input_val import InputValidationError, validate_audit_input
-from sr_agent.models.audit import AuditInput, AuditSession, Principal
+from sr_agent.packs.audit.session import AuditInput, AuditSession, Principal
 
 
 @click.group()
@@ -132,7 +132,7 @@ def resume_confirmation(loop, session, memory) -> str:
 
     # Approved: rebuild + re-validate the action, then execute out-of-band-gated.
     action = Action(action_type=ActionType(payload["action_type"]), params=payload.get("params", {}))
-    validate_action(action, loop._audit_root)   # re-annotate class/reversibility
+    validate_action(action, loop._audit_root, loop._pack)   # re-annotate class/reversibility
     action.human_confirmation = True
     summary, event = loop.execute_confirmed(action)
     if event is not None:
@@ -428,9 +428,8 @@ def relay_cmd(request_id: str | None, show: bool, respond_file: str | None, list
     Relayed responses are external_llm_output — carrying a file does not grant
     human authority (use `sr-agent confirm` for that).
     """
-    from sr_agent.orchestrator.relay import (
-        ingest_response, list_pending, read_request, save_response,
-    )
+    from sr_agent.orchestrator.relay import list_pending, read_request, save_response
+    from sr_agent.packs.audit.relay_ingest import ingest_response
     relay_dir = config.relay_root
 
     if list_flag:
@@ -495,6 +494,7 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
     from sr_agent.orchestrator.chat_session import load_session, save_session
     from sr_agent.orchestrator.loop import OrchestratorLoop
     from sr_agent.packs.audit.escalation import domain_escalation
+    from sr_agent.packs.audit.pack import AUDIT_PACK
     from sr_agent.packs.audit.reasoning import AUDIT_CHAT_SYSTEM, signal_from
 
     memory = EpisodicMemory(config.memory_root, config.secret_key)
@@ -539,6 +539,7 @@ def chat_cmd(project_or_path: str | None, resume_session: str | None, project_id
     )
     loop = OrchestratorLoop(
         audit_session, memory, audit_root,
+        pack=AUDIT_PACK,
         reasoning_provider=provider,
         session_facts_provider=lambda: _facts_to_str(session.session_facts),
         confirmations_dir=config.confirmations_root,

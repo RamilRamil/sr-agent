@@ -20,8 +20,8 @@ from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 from sr_agent.io.progress import ProgressEvent, ProgressStream, silent
 from sr_agent.packs.audit.report import generate_report
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import AuditInput, AuditSession, Principal, Stage1Report
-from sr_agent.models.finding import Finding
+from sr_agent.packs.audit.session import AuditInput, AuditSession, Principal, Stage1Report
+from sr_agent.packs.audit.finding import Finding
 from sr_agent.models.memory import MemoryRecord, SourceType
 from sr_agent.packs.audit.planner.sig import build_sig, build_sig_from_smartgraphical
 from sr_agent.packs.audit.planner.stage1 import run_stage1

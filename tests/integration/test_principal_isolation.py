@@ -8,7 +8,7 @@ import pytest
 from pathlib import Path
 
 from sr_agent.memory.episodic import EpisodicMemory, PrincipalMismatch
-from sr_agent.models.audit import Principal
+from sr_agent.packs.audit.session import Principal
 from sr_agent.models.memory import MemoryRecord, SourceType
 
 SECRET = b"test-secret-key-32-bytes-exactly!"

@@ -21,10 +21,11 @@ from typing import Callable
 
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import AuditSession
-from sr_agent.models.finding import Finding
+from sr_agent.packs.audit.session import AuditSession
+from sr_agent.packs.audit.finding import Finding
 from sr_agent.models.memory import MemoryRecord, SourceType
-from sr_agent.orchestrator.relay import ingest_response, request_analysis
+from sr_agent.orchestrator.relay import request_analysis
+from sr_agent.packs.audit.relay_ingest import ingest_response
 
 logger = logging.getLogger(__name__)
 
@@ -158,7 +159,8 @@ def run_stage2_local(
     fails is skipped, not fatal. `tracer` (default: no-op) logs each call as a
     Langfuse generation for observability; it never touches episodic memory.
     """
-    from sr_agent.llm_core.local_client import ModelUnavailableError, analyze_target
+    from sr_agent.llm_core.local_client import ModelUnavailableError
+    from sr_agent.packs.audit.analyze import analyze_target
 
     findings: list[Finding] = []
     analyzed = 0

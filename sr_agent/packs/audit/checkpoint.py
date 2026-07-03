@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import AuditSession, Checkpoint
+from sr_agent.packs.audit.session import AuditSession, Checkpoint
 from sr_agent.models.memory import MemoryRecord, SourceType
 
 logger = logging.getLogger(__name__)

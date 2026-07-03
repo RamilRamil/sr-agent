@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 
 from sr_agent.llm_core.schemas import AgentAction
-from sr_agent.models.finding import BastetTag, Finding, Severity
+from sr_agent.packs.audit.finding import BastetTag, Finding, Severity
 
 logger = logging.getLogger(__name__)
 

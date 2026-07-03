@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from sr_agent.models.finding import Finding, Severity
+from sr_agent.packs.audit.finding import Finding, Severity
 
 logger = logging.getLogger(__name__)
 

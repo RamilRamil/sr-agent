@@ -40,8 +40,8 @@
 - [x] T006 Relocate `Principal` from `sr_agent/models/audit.py` to new kernel module `sr_agent/models/principal.py`; update all importers (`memory/episodic.py`, `io/*`, `models/chat.py`, `cli.py`, `models/audit.py`, …) — this alone removes the memory→audit coupling (R4)
 - [ ] T007 Loosen `AgentAction.finding` from `FindingPayload` to `dict | None` in `sr_agent/llm_core/schemas.py` (opaque payload; pack re-validates); keep the JSON wire-shape identical (R8/R11)
 - [x] T008 Invert `validate_action` → `validate_action(action, audit_root, pack)` in `sr_agent/orchestrator/action.py`: consult `pack.actions[type]` for class/reversibility/`validate_params`; **DERIVE the OOB-confirmation requirement from `action_class == write_execute` (kernel rule, R2)**; keep whitelist + path-containment fail-closed even if a pack validator is absent/permissive
-- [ ] T009 Assemble an initial `AUDIT_PACK` in `sr_agent/packs/audit/pack.py` that sources the *current* audit definitions (action types, tool entries, dispatch wrapping existing loop logic, domain triggers, prompt) — pack→kernel imports only; lets the system run through the interface before relocation
-- [ ] T010 Inject `pack=AUDIT_PACK` at the composition root `sr_agent/cli.py`; thread `pack` into `OrchestratorLoop.__init__` and `ChatReasoningProvider` (both now consume the interface, not audit modules directly)
+- [x] T009 Assemble an initial `AUDIT_PACK` in `sr_agent/packs/audit/pack.py` that sources the *current* audit definitions (action types, tool entries, dispatch wrapping existing loop logic, domain triggers, prompt) — pack→kernel imports only; lets the system run through the interface before relocation
+- [x] T010 Inject `pack=AUDIT_PACK` at the composition root `sr_agent/cli.py`; thread `pack` into `OrchestratorLoop.__init__` and `ChatReasoningProvider` (both now consume the interface, not audit modules directly)
 
 **Checkpoint**: the audit + chat paths run *through* the `CapabilityPack` interface; full suite green. This is the foundation both stories build on.
 
@@ -76,24 +76,24 @@
 ### Inversions (invert kernel consumers before moving modules — keeps green)
 
 - [x] T015 [US1] Split `evaluate_triggers` in `sr_agent/guardrails/escalation.py`: keep generic triggers #1/#2/#8; move finding-based #3–#7 to `sr_agent/packs/audit/escalation.py::domain_escalation`; kernel calls generic → then `pack.domain_escalation` (order preserved, R5)
-- [ ] T016 [US1] Invert loop execution: move `_dispatch`/`execute_confirmed`/`_persist_finding` bodies to `sr_agent/packs/audit/dispatch.py`; `orchestrator/loop.py` calls `pack.dispatch/execute_confirmed/persist_finding` with a narrow `PackContext`; kernel keeps the control flow + a built-in `read_file`/`search_code` default (R8)
+- [x] T016 [US1] Invert loop execution: move `_dispatch`/`execute_confirmed`/`_persist_finding` bodies to `sr_agent/packs/audit/dispatch.py`; `orchestrator/loop.py` calls `pack.dispatch/execute_confirmed/persist_finding` with a narrow `PackContext`; kernel keeps the control flow + a built-in `read_file`/`search_code` default (R8)
 - [x] T017 [US1] Split `ChatReasoningProvider` in `sr_agent/llm_core/chat_reasoning.py`: drop `models.finding`/`models.audit` imports; consume `pack.reasoning_prompt` + `pack.signal_from`; move the audit prompt + `_finding_from` to `sr_agent/packs/audit/reasoning.py` (R6)
 - [ ] T018 [US1] Split the tool registry: keep `ToolDefinition`/`_hash`/`verify_all_hashes`/`ToolTampered` in `sr_agent/tools/registry.py`; move audit tool entries to `sr_agent/packs/audit/registry_entries.py`; verify kernel-builtins ∪ pack tools at loop start (R7)
-- [ ] T019 [US1] Extract audit `ActionType` + `ACTION_CLASS_MAP` + `REVERSIBLE` + per-action `validate_params` to `sr_agent/packs/audit/actions.py`; `sr_agent/models/action.py` keeps generic `Action`/`ActionClass`/`ValidationStatus`/`ValidationResult` + the kernel built-in action set (read_file, search_code, write_memory, request_human_confirmation, escalate)
+- [x] T019 [US1] Extract audit `ActionType` + `ACTION_CLASS_MAP` + `REVERSIBLE` + per-action `validate_params` to `sr_agent/packs/audit/actions.py`; `sr_agent/models/action.py` keeps generic `Action`/`ActionClass`/`ValidationStatus`/`ValidationResult` + the kernel built-in action set (read_file, search_code, write_memory, request_human_confirmation, escalate)
 
 ### Relocations (move modules under packs/; update importers)
 
-- [ ] T020 [US1] Relocate `sr_agent/models/finding.py` → `sr_agent/packs/audit/finding.py` (Finding, Severity, BastetTag, SIG, FindingStatus, PoCStatus) + move `FindingPayload` out of `llm_core/schemas.py` into the pack; update pack-side importers
-- [ ] T021 [US1] Relocate `AuditSession`/`AuditInput`/`Stage1Report`/`Checkpoint` from `sr_agent/models/audit.py` → `sr_agent/packs/audit/session.py`; retype kernel call sites (`checkpoint.py`, `chat_session.py`, `context.py` drop the dead hint) to the `Session` protocol
+- [x] T020 [US1] Relocate `sr_agent/models/finding.py` → `sr_agent/packs/audit/finding.py` (Finding, Severity, BastetTag, SIG, FindingStatus, PoCStatus) + move `FindingPayload` out of `llm_core/schemas.py` into the pack; update pack-side importers
+- [x] T021 [US1] Relocate `AuditSession`/`AuditInput`/`Stage1Report`/`Checkpoint` from `sr_agent/models/audit.py` → `sr_agent/packs/audit/session.py`; retype kernel call sites (`checkpoint.py`, `chat_session.py`, `context.py` drop the dead hint) to the `Session` protocol
 - [x] T022 [P] [US1] Relocate `sr_agent/planner/` → `sr_agent/packs/audit/planner/` and `sr_agent/orchestrator/pipeline.py` → `sr_agent/packs/audit/pipeline.py`; update importers
-- [ ] T023 [P] [US1] Relocate audit tools (`static_analysis.py`, `smartgraphical.py`, `onchain.py`, `write_execute.py`) → `sr_agent/packs/audit/tools/`; update importers (they run inside the kernel `DockerSandbox`, unchanged)
+- [x] T023 [P] [US1] Relocate audit tools (`static_analysis.py`, `smartgraphical.py`, `onchain.py`, `write_execute.py`) → `sr_agent/packs/audit/tools/`; update importers (they run inside the kernel `DockerSandbox`, unchanged)
 - [x] T024 [P] [US1] Relocate audit guardrails (`mock_detect.py`, `severity.py`) → `sr_agent/packs/audit/guardrails/` and `io/report.py`, `io/input_val.py` → `sr_agent/packs/audit/`; update importers
-- [ ] T025 [US1] Move `local_client.py`'s audit `_PROMPT`/`build_analysis_prompt`/`analyze_target` to `sr_agent/packs/audit/reasoning.py`; keep `LocalClient` (generate/ready/warm/available) generic in the kernel
+- [x] T025 [US1] Move `local_client.py`'s audit `_PROMPT`/`build_analysis_prompt`/`analyze_target` to `sr_agent/packs/audit/reasoning.py`; keep `LocalClient` (generate/ready/warm/available) generic in the kernel
 
 ### Close the boundary
 
-- [ ] T026 [US1] Finalize `sr_agent/packs/audit/pack.py::AUDIT_PACK` to source everything from the relocated pack modules; update `sr_agent/cli.py` imports to the new paths (composition root only)
-- [ ] T027 [US1] Flip `tests/architecture/test_kernel_pack_boundary.py` to a **hard assertion == 0**; resolve any residual kernel→`sr_agent.packs` import until it passes
+- [x] T026 [US1] Finalize `sr_agent/packs/audit/pack.py::AUDIT_PACK` to source everything from the relocated pack modules; update `sr_agent/cli.py` imports to the new paths (composition root only)
+- [x] T027 [US1] Flip `tests/architecture/test_kernel_pack_boundary.py` to a **hard assertion == 0**; resolve any residual kernel→`sr_agent.packs` import until it passes
 
 **Checkpoint**: ✅ boundary check = 0; audit code lives only under `packs/audit/`; full suite green.
 

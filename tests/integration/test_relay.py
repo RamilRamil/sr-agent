@@ -7,14 +7,14 @@ import json
 import pytest
 from pathlib import Path
 
-from sr_agent.models.finding import FindingStatus, Severity
+from sr_agent.packs.audit.finding import FindingStatus, Severity
 from sr_agent.orchestrator.relay import (
     extract_findings,
-    ingest_response,
     list_pending,
     request_analysis,
     RelayAdapterError,
 )
+from sr_agent.packs.audit.relay_ingest import ingest_response
 
 
 @pytest.fixture

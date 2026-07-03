@@ -7,7 +7,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, model_validator
 
 # Principal relocated to the kernel (models/principal.py, feature 004 R4).
-# Re-exported here so existing `from sr_agent.models.audit import Principal`
+# Re-exported here so existing `from sr_agent.packs.audit.session import Principal`
 # importers keep working during the transition; kernel modules should import it
 # from models.principal directly to avoid the (soon-to-be-pack) audit coupling.
 from sr_agent.models.principal import Principal

@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from sr_agent.models.audit import AuditInput
+from sr_agent.packs.audit.session import AuditInput
 
 
 class InputValidationError(Exception):

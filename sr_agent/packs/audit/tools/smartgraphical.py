@@ -20,7 +20,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from sr_agent.models.finding import BastetTag, Finding, Severity
+from sr_agent.packs.audit.finding import BastetTag, Finding, Severity
 
 logger = logging.getLogger(__name__)
 

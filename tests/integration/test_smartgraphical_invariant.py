@@ -9,8 +9,8 @@ from pathlib import Path
 
 from sr_agent.guardrails.sanitize import sanitize
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import Principal
-from sr_agent.models.finding import FindingStatus
+from sr_agent.packs.audit.session import Principal
+from sr_agent.packs.audit.finding import FindingStatus
 from sr_agent.models.memory import MemoryRecord, SourceType
 from sr_agent.packs.audit.tools.smartgraphical import SGFinding, sg_to_findings
 
