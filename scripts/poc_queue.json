@@ -1,134 +1,140 @@
 [
   {
-    "id": "F1-coverage-manipulation",
-    "title": "Same-block silo padding self-selects exit-tier and bypasses cooldown lock",
-    "location": "StrataCDO.coverage / calculateExitMode + SharesCooldown.cancel",
-    "description": "coverage() = jrtNavUnlocked*1e6/srtNavUnlocked excludes silo-locked shares. Attacker locks fee-free padding shares into the silo (SharesLock redeem) in the same block as their real redemption, shifting coverage() into the least-restrictive tier (r2: instant, no lock) before the real redemption executes, then reclaims the padding via cancel() which has no minimum-dwell or forfeit check. Concrete numbers: jrtNav=srtNav=100e18, lock-only tier r1=(fee 0, lock 7d) at coverage ~1,000,000ppm; locking 20e18 Senior padding raises coverage to ~1,250,000ppm, selecting r2 (instant/no-lock). PoC should: seed both tranches >=10 assets, configure a lock-only exit tier (feePpm=0, sharesLock>0), have attacker lock padding shares, verify coverage() shifts, verify the real redemption bypasses the intended lock, verify cancel() fully refunds the padding."
+    "id": "H-01",
+    "title": "Same-block silo padding self-selects the exit-tier and bypasses the cooldown lock",
+    "location": "contracts/tranches/base/cooldown/SharesCooldown.sol:cancel, StrataCDO.sol:coverage",
+    "description": "A redeemer can lock fee-free 'padding' shares into the silo to shift `coverage()` into the least-restrictive tier before their real redemption in the same block. This bypasses the cooldown lock."
   },
   {
-    "id": "F2-unstakecooldown-dos",
-    "title": "UnstakeCooldown 70-slot merge path permanently DoSes Saturn/Midas unstake queues",
-    "location": "UnstakeCooldown.transfer (contracts/tranches/base/cooldown/UnstakeCooldown.sol)",
-    "description": "When a receiver's active-request count reaches MAX_ACTIVE_REQUEST_SLOTS (70), transfer() reuses the last request's proxy and calls proxy.request() again to merge. This assumes request() can be re-invoked on an already-pending proxy — true for Ethena's implementation (no guard) but SaturnCooldownRequestImpl/MidasCooldownRequestImpl both enforce require(pending == false, 'HasActiveRequest'). Every proxy still tracked in activeRequests has pending==true, so the merge call always reverts for Saturn/Midas tokens once the cap is hit. PoC should: use a Saturn or Midas-backed strategy, drive a receiver to 70 active unstake requests, verify the 71st transfer() call reverts with HasActiveRequest, confirming the permanent DoS until earlier requests are finalized."
+    "id": "H-02",
+    "title": "`UnstakeCooldown`'s 70-slot merge path permanently DoSes Saturn/Midas unstake queues",
+    "location": "contracts/tranches/base/cooldown/UnstakeCooldown.sol:transfer",
+    "description": "When a receiver's active-request count reaches `MAX_ACTIVE_REQUEST_SLOTS` (70), the transfer function unconditionally reuses the last request's proxy, which always reverts for Saturn/Midas tokens once the cap is hit."
   },
   {
-    "id": "F3-metakey-sentinel-collision",
-    "title": "metaKey nonce starts at the reserved sentinel, permanently poisoning strategyOptions routing",
-    "location": "SharesCooldown.requestRedeemInner (contracts/tranches/base/cooldown/SharesCooldown.sol)",
-    "description": "_metaKeyNonce is zero-initialized and post-incremented, so the first strategyOptions-bearing cooldown request for any (vault, receiver) pair is assigned metaKey = bytes12(uint96(0)) == bytes12(0) — the sentinel meaning 'no metadata'. Its options are stored under that sentinel and never deleted (cleanup guards check metaKey != bytes12(0)), so every later empty-options request for that pair inherits the first request's stale options at finalization. PoC should: make a first request with non-empty strategyOptions (verify it gets metaKey==bytes12(0)), make a second request with empty strategyOptions for the same (vault,receiver), finalize the second request, and assert it is redeemed using the first request's strategyOptions instead of empty options."
+    "id": "H-03",
+    "title": "`metaKey` nonce starts at the reserved sentinel, permanently poisoning `strategyOptions` routing",
+    "location": "contracts/tranches/base/cooldown/SharesCooldown.sol:requestRedeemInner",
+    "description": "The first strategyOptions-bearing cooldown request for any `(vault, receiver)` pair is assigned `metaKey = bytes12(0)`, the sentinel value. This prevents later requests from being properly handled."
   },
   {
-    "id": "F4-finalizewithfee-wrong-cap",
-    "title": "finalizeWithFee checks the wrong owner's withdrawal cap, spuriously blocking legitimate early exits",
-    "location": "SharesCooldown.finalizeWithFee",
-    "description": "The pre-redeem check computes maxAssets via the single-arg IStrataCDO(cdo).maxWithdraw(address(vault)), which resolves owner=address(0) and returns the RESTRICTED Junior cap (jrtNavEffective - srtNavEffective*minimumJrtSrtRatio/1e18). The redeem call that follows executes with sender==sharesCooldown, which Accounting.maxWithdrawInner exempts from that floor (full uncapped NAV). Concrete numbers: jrtNav=srtNav=100e18, minimumJrtSrtRatio=0.05e18 -> check-side cap=95e18 but real cap=100e18. PoC should: seed both tranches >=10 assets, set minimumJrtSrtRatio=0.05e18, create a Junior early-exit request whose post-fee shares correspond to ~96e18-99e18 assets, call finalizeWithFee, and verify it reverts with MaxRedemptionLimitReached even though a plain finalize() after cooldown would succeed for the same shares."
+    "id": "H-04",
+    "title": "`finalizeWithFee` checks the wrong owner's withdrawal cap, spuriously blocking legitimate early exits",
+    "location": "contracts/tranches/base/cooldown/SharesCooldown.sol:finalizeWithFee",
+    "description": "The pre-redeem check computes `maxAssets` with the restricted Junior cap, while the actual redeem call is exempted from this floor."
   },
   {
-    "id": "F5-aprpairprovider-stale-timestamp",
-    "title": "AprPairProvider discards oracle observation timestamps, defeating downstream staleness checks",
-    "location": "AprPairProvider.getAprPair + AprPairFeed.latestRoundData",
-    "description": "AprPairProvider.getAprPair() stamps timestamp=block.timestamp and discards the real timestamps returned by target.getApr()/base.getApr(). AprPairFeed's pull-fallback path (latestRoundData, used when the pushed round is stale) validates only APR-value bounds via ensureValid, with no independent freshness gate. ChainlinkAprProviderLib.getApr silently returns 0 on any anomalous round (stale, zero, decreasing price), which passes ensureValid(0) cleanly. PoC should: mock an underlying oracle returning an anomalous/stale round so ChainlinkAprProviderLib.getApr returns 0, call AprPairFeed.latestRoundData() via the pull-fallback path, and verify it returns aprTarget=0/aprBase=0 stamped with a fresh block.timestamp with no revert or staleness signal — demonstrating the silent zero-APR is indistinguishable from a legitimate reading."
+    "id": "H-05",
+    "title": "`AprPairProvider` discards oracle observation timestamps, defeating downstream staleness checks",
+    "location": "contracts/tranches/oracles/providers/AprPairProvider.sol:getAprPair, AprPairFeed.sol:latestRoundData",
+    "description": "`AprPairProvider` stamps `timestamp = block.timestamp` and discards the real timestamps returned by the underlying oracle calls. This defeats downstream staleness checks."
   },
   {
-    "id": "L1-finalize-token-lock-griefing",
-    "title": "Permissionless finalize forces a victim's redemption into an unwanted token",
-    "location": "SharesCooldown.finalize(vault, user, at)",
-    "description": "This overload is fully permissionless, callable by anyone for any user, and always redeems matured requests to the request's preconfigured req.token, denying the victim the chance to call finalizeWithOverrides/finalizeWithTokenOverride to pick a different output token. PoC should: create a matured request for a victim with req.token=TokenA, have a third-party unprivileged caller invoke finalize(vault, victim, at) before the victim acts, and verify the victim's assets are force-redeemed to TokenA even though the victim intended to call finalizeWithOverrides for a different token."
+    "id": "H-06",
+    "title": "Silo padding also griefs other same-block redeemers",
+    "location": "contracts/tranches/StrataCDO.sol:coverage",
+    "description": "Locking Junior padding lowers `coverage()`, forcing any other same-block Senior redeemer into the worst tier."
   },
   {
-    "id": "L2-default-slippage-truncates-zero",
-    "title": "Default swap slippage floor truncates to zero for small deposits",
-    "location": "TrancheDepositor._deposit_viaSwap",
-    "description": "When swapAmountOutMinimum is left at 0, the fallback floor amount*minimumReturnPercentage*10^decOut/10^decIn/1000 truncates to 0 for small amount whenever decIn > decOut (e.g. 18->6 decimals, amount < ~1.11e12), silently disabling the default slippage guard. PoC should: configure a swap route from an 18-decimal token to a 6-decimal token, deposit a small amount below the truncation threshold with swapAmountOutMinimum=0, and verify the computed amountOutMin is 0 so the swap accepts near-zero output without reverting."
-  },
-  {
-    "id": "L3-cooldown-dust-revert",
-    "title": "Dust redemptions revert instead of charging zero fee",
-    "location": "SharesCooldown.accrueFee",
-    "description": "sharesFee = floor(shares*feeBps/1e18) rounds to 0 for small shares under a low fee tier, and require(sharesFee > 0) reverts the whole call. PoC should: configure a low nonzero fee tier (e.g. feePpm=1), attempt a redemption/early-exit with a dust amount of shares below the rounding threshold, and verify it reverts with EmptyFee instead of proceeding with zero fee."
-  },
-  {
-    "id": "L4-coverage-mixed-valuation-basis",
+    "id": "H-07",
     "title": "Coverage mixes real-T0 and projected valuation bases",
-    "location": "StrataCDO.totalAssetsUnlocked / coverage (DiscreteAccounting variant)",
-    "description": "Under DiscreteAccounting, coverage()'s Junior term subtracts convertToAssets (projected jrtNavT1Projected) from totalAssetsT0() (real jrtBaseNav) — the minuend and subtrahend use different valuation bases for the same tranche. PoC should: deploy with DiscreteAccounting, create a state where projected and real Junior NAV diverge (e.g. mid-block projection delta), read coverage() before and after, and demonstrate the mixed-basis subtraction produces a coverage value inconsistent with either pure-real or pure-projected NAV — quantify the delta and whether it creates a second lever on coverage() beyond the F1 silo-padding vector."
+    "location": "contracts/tranches/StrataCDO.sol:totalAssetsUnlocked, coverage",
+    "description": "Under `DiscreteAccounting`, the Junior term subtracts `convertToAssets` from `totalAssetsT0()`, using different valuation bases for each side."
   },
   {
-    "id": "L5-batched-finalize-uncapped",
-    "title": "Batched finalize has no analogous withdrawal-cap check",
-    "location": "SharesCooldown._processFinalization",
-    "description": "finalizeWithFee guards a single redemption against maxWithdraw, but the permissionless batched _processFinalization path relies solely on Tranche.redeem's silo-owner maxRedeem, which bypasses the minimumJrtSrtRatio floor entirely for the silo (by design — shares already committed at request time). PoC should: accumulate multiple matured Junior redemption requests in the silo that, if drained together, would push Junior NAV below minimumJrtSrtRatio; call the batched finalize path and verify it succeeds despite breaching the ratio floor that would block an equivalent direct withdrawal; assess whether any interleaved-deposit mispricing window exists during the batch."
+    "id": "H-08",
+    "title": "Batched `finalize` has no analogous cap check",
+    "location": "contracts/tranches/base/cooldown/SharesCooldown.sol:_processFinalization",
+    "description": "`finalizeWithFee` guards against `maxWithdraw`, but the permissionless batched path relies solely on `Tranche.redeem`'s silo-owner `maxRedeem`, bypassing the `minimumJrtSrtRatio` floor."
   },
   {
-    "id": "L6-accountinglib-floor-conservation",
-    "title": "Reserve-decomposition floor drops up to ONE_ASSET of value from the NAV decrement",
-    "location": "AccountingLib.splitValuatedNavOut",
-    "description": "In the JRT-solvent branch, srtAssetsOut is capped by Math.min(..., saturatingSub(srtBaseNav, ONE_ASSET)) but jrtAssetsOut is not correspondingly reduced, so the returned pair can sum to less than the effective amount actually released, under-decrementing recorded NAV. NOTE: this is gated on Senior NAV sitting within ONE_ASSET of its floor, which the bounty PoC rule excludes (tranches must be seeded >=10 assets) — write the PoC anyway to characterize the bug precisely and confirm whether any seeded-realistic path reaches the same branch, even if the minimal repro itself needs the floor and is therefore not directly submittable."
+    "id": "H-09",
+    "title": "Reserve-decomposition floor drops up to `ONE_ASSET` of value from the NAV decrement",
+    "location": "contracts/tranches/utils/AccountingLib.sol:splitValuatedNavOut",
+    "description": "The Senior-side cap reduces the deducted total without a matching reduction on the Junior side, under-decrementing recorded NAV."
   },
   {
-    "id": "L7-roundingguard-1wei-inflation",
-    "title": "RoundingGuard lets deposits over-credit NAV by up to 1 wei",
-    "location": "StrataCDO.deposit (context) / RoundingGuard.preferOriginalWithin1Wei",
-    "description": "preferOriginalWithin1Wei(baseAssets, baseAssetsNet) credits the tranche NAV with the original deposit amount even when the strategy round-trip (assets->shares->assets) actually netted 1 wei less, crediting 1 wei of NAV not backed by real assets. PoC should: mock or drive a strategy round-trip that nets exactly baseAssets-1, perform a deposit, and assert the tranche's recorded NAV increases by baseAssets rather than baseAssets-1 — then assess whether repeated deposits can compound this into a non-dust discrepancy."
+    "id": "H-10",
+    "title": "Dust redemptions revert instead of charging zero fee",
+    "location": "contracts/tranches/base/cooldown/SharesCooldown.sol:accrueFee",
+    "description": "`sharesFee` rounds to 0 for small `shares` under a low fee tier, and the `require(sharesFee > 0)` reverts the whole call."
   },
   {
-    "id": "L8-cooldownbase-initializer-frontrun",
+    "id": "H-11",
+    "title": "`RoundingGuard` lets deposits over-credit NAV by ≤1 wei",
+    "location": "contracts/tranches/StrataCDO.sol:deposit (context)",
+    "description": "`preferOriginalWithin1Wei` credits the original deposit amount even when the strategy round-trip actually netted 1 wei less."
+  },
+  {
+    "id": "H-12",
     "title": "Cooldown-proxy initializer is unprotected on the proxy itself",
-    "location": "CooldownBase.initialize",
-    "description": "initialize(owner_, acm_) is public with no access restriction beyond the OZ initializer modifier; the implementation contract is protected via _disableInitializers(), but if a proxy's deployment and its initialize() call are split into separate transactions, the window between them is front-runnable. PoC should: deploy a fresh proxy pointing at a CooldownBase-derived implementation WITHOUT calling initialize in the same transaction, then from an attacker account call initialize() first, and verify the attacker becomes owner_ — demonstrating the front-run window when deploy and init are non-atomic (note in the PoC that real deploy scripts may call these atomically; this tests the code-level guard only)."
+    "location": "contracts/tranches/base/cooldown/CooldownBase.sol:initialize",
+    "description": "`initialize` is `public` with no access restriction beyond the OZ `initializer` modifier."
   },
   {
-    "id": "L9-permit-frontrun-griefing",
-    "title": "depositWithPermit can be griefed via signature front-running",
-    "location": "TrancheDepositor.depositWithPermit",
-    "description": "The wrapped try permit() catch { require(allowance >= amount) } fallback means a griefer can submit the victim's permit signature directly to the token first, consuming the nonce, so the victim's depositWithPermit call's permit() reverts internally and falls through to a (typically zero) standing-allowance check that then reverts the whole call. PoC should: have a victim sign an EIP-2612 permit for TrancheDepositor.depositWithPermit, have an attacker submit that exact signature directly to the token's permit() first, then have the victim's depositWithPermit transaction land and verify it reverts due to consumed nonce + insufficient standing allowance."
+    "id": "H-13",
+    "title": "`depositWithPermit` can be griefed via signature front-running",
+    "location": "contracts/tranches/TrancheDepositor.sol:depositWithPermit",
+    "description": "A griefer can submit the victim's permit signature directly to the token first, consuming the nonce."
   },
   {
-    "id": "L10-unstakecooldown-sameblock-revert",
-    "title": "UnstakeCooldown same-block reuse also reverts on Saturn/Midas",
-    "location": "UnstakeCooldown.transfer (same-block reuse branch, distinct from the 70-slot F2 branch)",
-    "description": "Two redemptions to the same receiver in one block route to the same proxy via the requestedAt()==block.timestamp reuse path, which calls proxy.request() a second time. For Saturn/Midas this reverts with HasActiveRequest (same root cause as F2 but the same-block branch, not the 70-slot-full branch). PoC should: use a Saturn or Midas-backed strategy, trigger two withdraw/redeem calls to the same receiver within a single block/transaction (or via a batching helper), and verify the second UnstakeCooldown.transfer call reverts with HasActiveRequest."
+    "id": "H-14",
+    "title": "`UnstakeCooldown`'s same-block reuse also reverts on Saturn/Midas",
+    "location": "contracts/tranches/base/cooldown/UnstakeCooldown.sol:transfer",
+    "description": "Two same-block redemptions to one receiver on a Saturn/Midas-backed token hit the same `pending == true` re-request revert."
   },
   {
-    "id": "L11-unstakecooldown-unlock-extension",
+    "id": "H-15",
     "title": "Reused proxy's unlock time can be pushed forward for the whole batch",
-    "location": "UnstakeCooldown.transfer (70-slot-full merge branch)",
-    "description": "When requestsCount >= MAX_ACTIVE_REQUEST_SLOTS, transfer() unconditionally reuses requests[last].proxy and, if the new unlockAt is later, does requests[last].unlockAt = unlockAt — extending the unlock time for whatever amount was already accumulated in that shared proxy (applies to Ethena where the merge itself succeeds, unlike F2/L10's Saturn/Midas revert). PoC should: use an Ethena-backed strategy, drive a receiver to exactly MAX_ACTIVE_REQUEST_SLOTS (70) active requests, submit one more transfer() with a longer cooldown than the existing last request, and verify the last request's unlockAt is pushed forward, delaying the previously-accumulated amount."
+    "location": "contracts/tranches/base/cooldown/UnstakeCooldown.sol:transfer",
+    "description": "The 70-slot-full merge branch extends `requests[last].unlockAt` forward whenever the new unlock is later."
   },
   {
-    "id": "L12-fee-on-transfer-desync",
-    "title": "Fee-on-transfer tokens desync recorded vs actual silo balance",
-    "location": "ERC20Cooldown.transfer / finalize",
-    "description": "req.amount records the requested amount, not the amount actually received via safeTransferFrom; on a fee-on-transfer or rebasing token, finalize can over-pay early claimants and leave the silo short for later ones. PoC should: deploy ERC20Cooldown with a mock fee-on-transfer token (e.g. 1% fee), create multiple cooldown transfer requests, finalize them in sequence, and verify the silo runs out of real token balance before all recorded req.amount entries have been paid out — note in the PoC that the named production-supported tokens (USDe/USDC/sUSDe/Midas) are not fee-on-transfer, so this demonstrates the code-level gap rather than an in-scope live exploit."
+    "id": "H-16",
+    "title": "Fee-on-transfer tokens desync recorded vs. actual silo balance",
+    "location": "contracts/tranches/base/cooldown/ERC20Cooldown.sol:transfer, finalize",
+    "description": "`req.amount` records the requested amount, not the amount actually received via `safeTransferFrom`. This causes desynchronization on fee-on-transfer or rebasing tokens."
   },
   {
-    "id": "L13-unstakecooldown-cross-impl-read",
-    "title": "UnstakeCooldown.finalize gates pending proxies against the current implementation, not the one they were created under",
-    "location": "UnstakeCooldown.finalize",
-    "description": "finalize reads imp = implementations[token] (the CURRENT implementation) and calls imp.isCooldownActive() to gate requests whose proxies were created under a PREVIOUS implementation after a setImplementations swap — the pending/claimable decision is made against the wrong implementation's cooldown semantics. PoC should: create an unstake request under implementation A, call setImplementations to swap the token's implementation to B (with different isCooldownActive() semantics), call finalize, and verify the request is gated (accepted/rejected as pending) based on B's isCooldownActive() rather than A's, even though the underlying proxy is still running A's logic — the try/catch on the individual proxy should limit this to a skip rather than a stuck fund, verify that too."
+    "id": "H-17",
+    "title": "`UnstakeCooldown.finalize` gates pending proxies against the current implementation, not the one they were created under",
+    "location": "contracts/tranches/base/cooldown/UnstakeCooldown.sol:finalize",
+    "description": "`isCooldownActive()` is read from `implementations[token]`, which can diverge from the implementation a pooled/in-flight proxy was actually created against."
   },
   {
-    "id": "L14-aprpairfeed-pullpath-no-freshness",
-    "title": "AprPairFeed's pull-fallback path has no independent freshness gate",
-    "location": "AprPairFeed.latestRoundData (read path, distinct from F5's AprPairProvider write-path issue)",
-    "description": "The push path (updateRoundDataInner) enforces StaleUpdate/OutOfOrderUpdate; the pull-fallback inside latestRoundData validates only APR-value bounds via ensureValid and returns the provider's returned timestamp completely unchecked for freshness. PoC should: construct a scenario where the pushed round is stale (triggering the pull-fallback), have the mock provider return a very old real timestamp (not block.timestamp — isolate this from F5's AprPairProvider-specific timestamp-dropping bug), and verify latestRoundData() returns that stale-timestamped round with no revert and no distinguishing signal to the caller."
+    "id": "H-18",
+    "title": "`AprPairFeed`'s pull-fallback path has no freshness gate",
+    "location": "contracts/tranches/oracles/AprPairFeed.sol:latestRoundData",
+    "description": "The push path enforces `StaleUpdate`/`OutOfOrderUpdate`, but the pull-fallback inside `latestRoundData` validates only APR-value bounds and returns the provider's timestamp unchecked."
   },
   {
-    "id": "L15-trenchdepositor-reentrancy-asymmetry",
-    "title": "TrancheDepositor.deposit lacks the nonReentrant guard its permit sibling has",
-    "location": "TrancheDepositor.deposit / _deposit_viaSwap / _deposit_viaWithdraw",
-    "description": "depositWithPermit is nonReentrant; the plain deposit entrypoint is not, yet both reach the same balance-delta accounting (amountReceived = balanceOf(after) - before) around external router/vault calls. PoC should: configure a malicious governance-allowlisted router or ERC4626 vault that reenters TrancheDepositor.deposit during its external call, and verify whether the reentrant call can corrupt the balance-delta measurement in a way that mints shares disproportionate to assets actually received — be explicit in the PoC about the governance-allowlist precondition (this requires a malicious configured component, not an arbitrary attacker-supplied token/router)."
+    "id": "H-19",
+    "title": "`TrancheDepositor.deposit` lacks the `nonReentrant` guard its permit sibling has",
+    "location": "contracts/tranches/TrancheDepositor.sol:deposit, depositWithPermit",
+    "description": "`deposit` lacks the `nonReentrant` guard while `depositWithPermit` has it."
   },
   {
-    "id": "L16-iscooldownactiveinner-sentinel-boundary",
+    "id": "H-20",
+    "title": "A third party can force-finalize a victim's redemption into an unwanted token",
+    "location": "contracts/tranches/base/cooldown/SharesCooldown.sol:finalize(vault, user, at)",
+    "description": "`finalize(vault, user, at)` is fully permissionless and always redeems to the request's preconfigured `req.token`, denying the victim the chance to call `finalizeWithOverrides` or `finalizeWithTokenOverride`."
+  },
+  {
+    "id": "H-21",
+    "title": "Default swap slippage floor truncates to zero for small deposits",
+    "location": "contracts/tranches/TrancheDepositor.sol:_deposit_viaSwap",
+    "description": "When `swapAmountOutMinimum` is left at 0, the fallback floor truncates to zero for small `amount`, silently disabling the default slippage guard."
+  },
+  {
+    "id": "H-22",
     "title": "Cooldown-tier lock check ignores two of the three coverage bands",
-    "location": "SharesCooldown.isCooldownActiveInner / calculateExitParams",
-    "description": "isCooldownActiveInner returns cooldown-inactive whenever p1==0 && r2.sharesLock==0, without inspecting r0/r1.sharesLock. If bounds are configured with p1==0 (forcing p0==0 per setVaultExitBounds's p0<=p1 check) but r0.sharesLock>0, calculateExitParams returns r0 (a real future unlockAt) whenever coverage()==0, yet isCooldownActiveInner reports inactive, so requests under that tier become instantly claimable, bypassing their own lock. PoC should: configure vaultExitBounds with p1=0, p0=0, r0.sharesLock>0, drive coverage() to exactly 0 (documenting this requires near-total Junior loss, not the ONE_ASSET floor itself), create a redemption request under r0, and verify it is claimable immediately via finalize() despite unlockAt being in the future — flag clearly in the PoC that this requires an unusual admin bounds configuration."
+    "location": "contracts/tranches/base/cooldown/SharesCooldown.sol:isCooldownActiveInner",
+    "description": "The global 'is any lock active' check inspects only `p1`/`r2.sharesLock`, not `r0`/`r1.sharesLock`. An admin bounds configuration with `p1 == 0` (forcing `p0 == 0`) but a nonzero `r0.sharesLock` would let a request created under `r0` become instantly claimable despite carrying a real `unlockAt`."
   },
   {
-    "id": "L17-valuationprice-one-directional-pause",
+    "id": "H-23",
     "title": "Valuation-loss auto-pause has no auto re-enable on recovery",
-    "location": "StrataCDO.setValuationPrice",
-    "description": "Entering a valuation loss auto-disables JRT withdrawals and SRT deposits (actionsJrt.isWithdrawEnabled=false, actionsSrt.isDepositEnabled=false), but restoring valuationPrice==1e18 does not re-enable them — only the separate maxWithdrawInner grace-period gate self-clears. PoC should: trigger a valuation loss via setValuationPrice, verify JRT withdraw and SRT deposit become disabled, restore valuationPrice to 1e18 via a second setValuationPrice call, and verify actionsJrt.isWithdrawEnabled and actionsSrt.isDepositEnabled remain false until an explicit PAUSER_ROLE setActionStates call re-enables them — note in the PoC whether this appears to be intentional (NatSpec only documents automatic disable, not re-enable)."
+    "location": "contracts/tranches/StrataCDO.sol:setValuationPrice",
+    "description": "Entering a valuation loss auto-disables JRT withdrawals and SRT deposits, but restoring `valuationPrice == 1e18` does not re-enable them."
   }
 ]
