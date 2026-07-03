@@ -18,15 +18,15 @@ from pathlib import Path
 
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 from sr_agent.io.progress import ProgressEvent, ProgressStream, silent
-from sr_agent.io.report import generate_report
+from sr_agent.packs.audit.report import generate_report
 from sr_agent.memory.episodic import EpisodicMemory
 from sr_agent.models.audit import AuditInput, AuditSession, Principal, Stage1Report
 from sr_agent.models.finding import Finding
 from sr_agent.models.memory import MemoryRecord, SourceType
-from sr_agent.planner.sig import build_sig, build_sig_from_smartgraphical
-from sr_agent.planner.stage1 import run_stage1
-from sr_agent.planner.stage2 import run_stage2
-from sr_agent.planner.stage3 import run_stage3
+from sr_agent.packs.audit.planner.sig import build_sig, build_sig_from_smartgraphical
+from sr_agent.packs.audit.planner.stage1 import run_stage1
+from sr_agent.packs.audit.planner.stage2 import run_stage2
+from sr_agent.packs.audit.planner.stage3 import run_stage3
 from sr_agent.tools.readonly import read_file
 
 logger = logging.getLogger(__name__)
@@ -250,7 +250,7 @@ def start_audit(
     # relay falls back to the manual Claude channel (pause/resume).
     if stage2_provider in ("local", "auto"):
         from sr_agent.llm_core.local_client import LocalClient
-        from sr_agent.planner.stage2 import run_stage2_local
+        from sr_agent.packs.audit.planner.stage2 import run_stage2_local
 
         client = local_client or LocalClient.for_stage2()
         if client.available():

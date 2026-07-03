@@ -24,7 +24,7 @@ from sr_agent.guardrails.severity import check_severity
 from sr_agent.models.finding import Finding, Severity
 
 if TYPE_CHECKING:
-    from sr_agent.planner.sig import StateInterferenceGraph
+    from sr_agent.packs.audit.planner.sig import StateInterferenceGraph
 
 logger = logging.getLogger(__name__)
 

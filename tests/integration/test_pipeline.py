@@ -8,7 +8,7 @@ from pathlib import Path
 
 from sr_agent.memory.episodic import EpisodicMemory
 from sr_agent.models.audit import AuditInput, Principal
-from sr_agent.orchestrator.pipeline import resume_audit, start_audit
+from sr_agent.packs.audit.pipeline import resume_audit, start_audit
 from sr_agent.orchestrator.relay import save_response
 
 SECRET = b"test-secret-key-32-bytes-exactly!"

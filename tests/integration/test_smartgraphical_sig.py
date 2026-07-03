@@ -9,8 +9,8 @@ import json
 from pathlib import Path
 
 from sr_agent.models.finding import Finding, Severity
-from sr_agent.planner.sig import build_sig, build_sig_from_smartgraphical
-from sr_agent.planner.stage3 import run_stage3
+from sr_agent.packs.audit.planner.sig import build_sig, build_sig_from_smartgraphical
+from sr_agent.packs.audit.planner.stage3 import run_stage3
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "smartgraphical"
 _EXAMPLE = Path(__file__).resolve().parents[2] / "examples" / "inheritance-vault"

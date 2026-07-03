@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from sr_agent.planner.stage1 import extract_functions
+from sr_agent.packs.audit.planner.stage1 import extract_functions
 
 _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 _WRITE_RE = re.compile(r"\b([A-Za-z_]\w*)\s*(?:\[[^\]]*\])*\s*(?:=(?![=>])|\+=|-=|\*=|/=)")

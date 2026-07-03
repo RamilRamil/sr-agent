@@ -6,7 +6,7 @@ from pathlib import Path
 import click
 
 from sr_agent.config import config
-from sr_agent.io.input_val import InputValidationError, validate_audit_input
+from sr_agent.packs.audit.input_val import InputValidationError, validate_audit_input
 from sr_agent.models.audit import AuditInput, AuditSession, Principal
 
 
@@ -214,7 +214,7 @@ def audit(
     from sr_agent.eval.tracer import Tracer
     from sr_agent.io.progress import ProgressStream
     from sr_agent.memory.episodic import EpisodicMemory
-    from sr_agent.orchestrator.pipeline import start_audit
+    from sr_agent.packs.audit.pipeline import start_audit
 
     memory = EpisodicMemory(config.memory_root, config.secret_key)
     relay_dir = config.relay_root
@@ -250,7 +250,7 @@ def resume_cmd(session_id: str) -> None:
     """Resume a paused audit: ingest relay responses, finish the report."""
     from sr_agent.io.progress import ProgressStream
     from sr_agent.memory.episodic import EpisodicMemory
-    from sr_agent.orchestrator.pipeline import resume_audit
+    from sr_agent.packs.audit.pipeline import resume_audit
 
     memory = EpisodicMemory(config.memory_root, config.secret_key)
     relay_dir = config.relay_root
