@@ -36,7 +36,18 @@ Already has spec/plan/tasks/analyze + I1/C1/C2 fixes. Fold in, placing each on t
 Setup + Foundational + US1 (Q&A chat). This is also what first *wires* the orphaned `orchestrator/loop.py` — i.e. the kernel becomes real. While implementing, respect the seam (Phase-4 prep): new chat code in kernel-appropriate places; PoC/roadmap bits pack-tagged, not hardwired into `loop.py`.
 
 ### Phase 4 — Spec 004: kernel ↔ capability-pack boundary
-**Status: fully SPEC'D (spec+plan+tasks+analyze committed `85049a0`), implementation DEFERRED.** We pause before implementing to first validate the agent's *workability* on a real task (PoC-writing for the pashov findings) — the near-term priority — rather than invest the multi-hour refactor up front.
+**Status: IMPLEMENTATION IN PROGRESS.** SC-001 (boundary check = 0) + US2 (hostile-pack security property) DONE and green; 15/19 kernel files freed of audit (through commit `b780235`, pushed). Remaining = one atomic block (the loop-inversion + AUDIT_PACK assembly) that must land together for green.
+
+**Resume plan for the atomic block (validated by a dry run — do in one focused pass):**
+1. `git mv` finding, audit→`packs/audit/session.py`, checkpoint, tools/onchain, tools/write_execute → `packs/audit/`; then `find sr_agent/packs/audit tests -name '*.py' -exec sed` to repoint refs (also `cli.py`) — **NOT** loop.py/relay.py (they invert, not repoint).
+2. `orchestrator/pack.py::PackContext`: add `poc_generator` field.
+3. New `packs/audit/dispatch.py`: `dispatch`/`execute_confirmed`/`persist_finding` (extracted from loop; `persist_finding` RETURNS the Finding — the kernel writes it with `source_type=external_llm_output`).
+4. New `packs/audit/relay_ingest.py` (`adapt_findings`+`RelayFinding`+`RelayIngestResult`+`ingest_response`; relay.py keeps transport + `extract_findings`) and `packs/audit/analyze.py` (`analyze_target`+`build_analysis_prompt`+`_PROMPT` from local_client).
+5. `packs/audit/pack.py`: assemble `AUDIT_PACK` — actions from the still-kernel `ActionType`/`ACTION_CLASS_MAP`/`REVERSIBLE`/`_validate_params`, tools from `TOOL_REGISTRY`, `privileged_statuses` frozenset, + the already-built `domain_escalation`/`signal_from`/`reasoning_prompt` (AUDIT_CHAT_SYSTEM).
+6. Invert `loop.py` (take `pack`+`checkpoint_fn`; build `self._ctx = PackContext(...)`; `_persist_finding`→pack + kernel write; `_dispatch`→`pack.dispatch`; `execute_confirmed`→`pack.execute_confirmed`; `save_checkpoint`→`checkpoint_fn`; drop AuditSession/Finding/write_execute/checkpoint imports; session→`Session`; findings lists→generic). Invert `relay.py`, clean `local_client.py`. Wire `cli.py` (AUDIT_PACK + checkpoint_fn into loop; relay cmd → pack `ingest_response`). Add `pack=AUDIT_PACK` at the ~8 `OrchestratorLoop(...)` construction sites (cli, pipeline, tests) and fix test imports (`analyze_target`, `ingest_response`).
+7. Full suite → green.
+
+**Deferred, boundary-clean (kernel-located audit *names*, not import violations — don't block SC-001):** `ActionType`→pack (needs generic `Action.action_type: str`), `_validate_params`→pack, registry split (T018). Revert point if the pass breaks: `b780235`.
 
 Design locked to **Target A (full seam)**: introduce one declarative `CapabilityPack` the kernel consumes by injection; relocate audit-specifics under `sr_agent/packs/audit/`; enforce the boundary with a directory-based import check (`no kernel module imports sr_agent.packs` → 0). One pack, no dynamic registry (wired explicitly in `cli.py`; YAGNI). 35 tasks, 7 phases, sequenced so **US2 (the "a pack cannot lower a guardrail" security property) lands first** with green checkpoints throughout.
 
