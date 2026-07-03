@@ -21,9 +21,9 @@
 
 **Purpose**: Package skeleton + the boundary-check ratchet, committed before any extraction.
 
-- [ ] T001 [P] Create pack package skeleton: `sr_agent/packs/__init__.py`, `sr_agent/packs/audit/__init__.py`, and empty `sr_agent/packs/audit/{tools,planner,guardrails}/__init__.py`
-- [ ] T002 [P] Create `tests/architecture/__init__.py` (new test package)
-- [ ] T003 Implement the boundary check in `tests/architecture/test_kernel_pack_boundary.py` per contracts/boundary-check.md — `ast`-scan every `sr_agent/**/*.py` except `sr_agent/packs/**` and `sr_agent/cli.py`; collect imports; run as an **informational ratchet** that prints the current kernel→`sr_agent.packs` violation set + count (not yet a hard failure)
+- [x] T001 [P] Create pack package skeleton: `sr_agent/packs/__init__.py`, `sr_agent/packs/audit/__init__.py`, and empty `sr_agent/packs/audit/{tools,planner,guardrails}/__init__.py`
+- [x] T002 [P] Create `tests/architecture/__init__.py` (new test package)
+- [x] T003 Implement the boundary check in `tests/architecture/test_kernel_pack_boundary.py` per contracts/boundary-check.md — `ast`-scan every `sr_agent/**/*.py` except `sr_agent/packs/**` and `sr_agent/cli.py`; collect imports; run as a hard `== 0` assertion with a full violation printout (starts green; invert-before-move keeps it 0 at every checkpoint — collapses T027 into this). Verified non-vacuous (catches absolute + relative pack imports).
 
 **Checkpoint**: skeleton present; ratchet reports a baseline (≈0, nothing moved yet); suite green.
 
