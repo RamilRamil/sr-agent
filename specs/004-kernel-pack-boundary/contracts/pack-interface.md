@@ -29,6 +29,7 @@ Pack callables receive a narrow **`PackContext`** (`audit_root`, `sandbox`, `poc
 - **OOB confirmation gate** — the requirement is **kernel-derived from `action_class`** (`write_execute ⇒ confirm`) and from `privileged_statuses`; a pack cannot mark such an action/status as not-requiring-confirmation. No convenience surface bypasses it.
 - **Per-turn tool-call budget** — bounds every turn; a pack cannot raise or remove it.
 - **Whitelist + path-containment + sandbox** — every pack tool is validated against the registry, confined to `audit_root`, and (for attacker-influenced execution) run inside the network-isolated Docker sandbox; a pack cannot opt out. A missing/permissive `validate_params` fails **closed** — kernel defaults still apply.
+- **Sandbox invocation safety (pack-author responsibility, not kernel-enforced)** — `DockerSandbox.run()` is a thin argv-passthrough; it does not inspect or normalize the target image's `ENTRYPOINT` form. A pack tool wrapper invoking an image with a **shell-form entrypoint** (`ENTRYPOINT=["/bin/sh","-c"]`) MUST pass its command as a single string, not an argv list — an argv list double-wraps under the image's own `sh -c` and silently no-ops (exit 0, empty output, indistinguishable from a trivial pass). Confirmed 2026-07-02 against `ghcr.io/foundry-rs/foundry`; see `docs/roadmap.md` gotcha #3 and `data-model.md`'s `PackContext.sandbox` entry.
 - **Generic escalation** — irreversible-action, unauthorized memory-status-change, and resource-limit triggers fire independent of the pack.
 
 ## Directionality

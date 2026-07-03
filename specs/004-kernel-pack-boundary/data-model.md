@@ -40,7 +40,7 @@ The narrow, least-privilege surface passed to pack callables (R8) — **not** th
 | Field | Type | Meaning |
 |---|---|---|
 | `audit_root` | `Path` | scope root (path-containment already enforced by the kernel) |
-| `sandbox` | `DockerSandbox` | the network-isolated sandbox pack tools must run inside |
+| `sandbox` | `DockerSandbox` | the network-isolated sandbox pack tools must run inside. **Invocation-safety note (validated 2026-07-02, docs/roadmap.md gotcha #3):** `DockerSandbox.run()` passes `command` as raw argv appended after the image name; an image with a **shell-form `ENTRYPOINT`** (e.g. `ENTRYPOINT=["/bin/sh","-c"]`, as `ghcr.io/foundry-rs/foundry` uses) double-wraps a multi-element argv under its own `sh -c`, and the real command silently no-ops (exit 0, empty output — indistinguishable from a trivial pass). A pack tool wrapper MUST hand such an image a **single command string** (`command=[full_shell_string]`), never an argv list, and MUST NOT assume a passing exit code means the command actually ran. |
 | `poc_dir` | `Path` | where write_execute artifacts land |
 | `wrap_data` | `Callable[..., str]` | the kernel's DATA-wrapper — pack output re-enters context wrapped, never raw |
 | `memory` | `EpisodicMemory` | append-only, HMAC — a pack writes through it but cannot forge `human_input` (kernel sets source tier) |
