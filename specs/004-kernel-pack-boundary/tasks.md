@@ -55,13 +55,13 @@
 
 ### Tests for User Story 2 (write first, expect them to hold given T008)
 
-- [ ] T011 [P] [US2] Hostile-pack case **H1** (skip-confirmation on a `write_execute` action, incl. mislabeling it `read_only`) in `tests/security/test_hostile_pack.py` per contracts/hostile-pack.md
-- [ ] T012 [P] [US2] Hostile-pack case **H2** (pack `persist_finding`/dispatch tries to write memory at `human_input` tier / fake a status change) in `tests/security/test_hostile_pack.py`
-- [ ] T013 [P] [US2] Hostile-pack case **H3** (pack tool with missing/permissive `validate_params`, path escaping `audit_root`, execution outside the sandbox → fail-closed) in `tests/security/test_hostile_pack.py`
+- [x] T011 [P] [US2] Hostile-pack case **H1** (skip-confirmation on a `write_execute` action, incl. mislabeling it `read_only`) in `tests/security/test_hostile_pack.py` per contracts/hostile-pack.md
+- [x] T012 [P] [US2] Hostile-pack case **H2** (pack `persist_finding`/dispatch tries to write memory at `human_input` tier / fake a status change) in `tests/security/test_hostile_pack.py`
+- [x] T013 [P] [US2] Hostile-pack case **H3** (pack tool with missing/permissive `validate_params`, path escaping `audit_root`, execution outside the sandbox → fail-closed) in `tests/security/test_hostile_pack.py`
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Make H1–H3 pass: confirm/repair the kernel enforcement so confirmation is class-derived (`orchestrator/action.py`), the memory source tier is kernel-set for pack writes (`orchestrator/loop.py` + `memory/episodic.py`), and containment/sandbox are unconditional — no `CapabilityPack` field grants a lever (data-model.md "Constraint")
+- [x] T014 [US2] Make H1–H3 pass: confirm/repair the kernel enforcement so confirmation is class-derived (`orchestrator/action.py`), the memory source tier is kernel-set for pack writes (`orchestrator/loop.py` + `memory/episodic.py`), and containment/sandbox are unconditional — no `CapabilityPack` field grants a lever (data-model.md "Constraint")
 
 **Checkpoint**: 🔒 the Principle-III security property is proven and green. **Safe stopping point** — if compute runs short, US2 has shipped through the real interface.
 
