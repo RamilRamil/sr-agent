@@ -488,6 +488,36 @@ def _fix_setup_override(code: str) -> tuple[str, bool]:
     return code2, True
 
 
+def _fix_import_paths(code: str, project: Path) -> tuple[str, bool]:
+    """The model picks the right import TARGET but often the wrong relative depth
+    (`../../../` vs `../../`). We know the real paths — rewrite each relative import
+    of a real project .sol to its exact relpath from audit/poc/. Remapped/library
+    imports (@openzeppelin/…, forge-std/…) are left as-is. Prefers git-tracked
+    (original) files so it never rewrites toward one of our generated PoCs."""
+    poc_dir = project / POC_SUBDIR
+    tracked = _tracked_sol(project)
+    changed = False
+
+    def repl(m: "re.Match") -> str:
+        nonlocal changed
+        full, path = m.group(0), m.group(1)
+        if not path.endswith(".sol") or path.startswith("@") or path.startswith("forge-std"):
+            return full
+        cands = [p for p in project.rglob(Path(path).name)
+                 if p.is_file() and not _SKIP_DIRS & set(p.relative_to(project).parts)]
+        if tracked:
+            cands = [p for p in cands if p.resolve() in tracked] or cands
+        if not cands:
+            return full
+        correct = os.path.relpath(cands[0], poc_dir)
+        if correct != path:
+            changed = True
+            return full.replace(path, correct)
+        return full
+
+    return re.sub(r'import[^;]*?["\']([^"\']+)["\']', repl, code), changed
+
+
 _ASSERT_RE = re.compile(
     r"\b(assertEq|assertTrue|assertFalse|assertGt|assertGe|assertLt|assertLe|"
     r"assertNotEq|assertApproxEqAbs|expectRevert|expectEmit)\b"
@@ -700,6 +730,9 @@ def main() -> None:
             code, changed = _fix_setup_override(code)
             if changed:
                 log({"event": "postfix_setup", "finding_id": fid, "stage": "draft"})
+        code, ip_changed = _fix_import_paths(code, args.project)
+        if ip_changed:
+            log({"event": "postfix_imports", "finding_id": fid, "stage": "draft"})
 
         outcome = "unknown"
         res = None
@@ -765,6 +798,9 @@ def main() -> None:
                 code, changed = _fix_setup_override(code)
                 if changed:
                     log({"event": "postfix_setup", "finding_id": fid, "stage": f"fix{attempt}"})
+            code, ip_changed = _fix_import_paths(code, args.project)
+            if ip_changed:
+                log({"event": "postfix_imports", "finding_id": fid, "stage": f"fix{attempt}"})
 
         # `forge test --match-path` only selects which tests RUN, not which
         # files get COMPILED — every *.t.sol under FOUNDRY_TEST is compiled as
