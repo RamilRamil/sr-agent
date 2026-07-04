@@ -53,8 +53,27 @@ Load-bearing decisions (see `specs/004-kernel-pack-boundary/research.md` R1–R1
 - `Principal` relocates to a kernel module (kills the memory→audit coupling — it was just a mislocated generic type); `AuditSession` factors into a kernel `Session` protocol + audit extension.
 - Confirmed while reading the code: `context.py`'s `AuditSession` import was a *dead* type hint; the real audit-policy bleed into the kernel is in `guardrails/escalation.py` (triggers #3–#7) and `orchestrator/{loop,action}.py`.
 
-### Phase 5 — Spec 005: experiential knowledge loop
-Capture-always → reactive candidate queue (`sr-agent lessons` list/show/approve/dismiss, mirroring `sr-agent confirm`) → human command promotes → embed (HMAC-signed; pack content) → retrieve-at-build as **suggestion, not control** (v1). Dedup by error-signature to keep the human queue low-noise. Mechanism = kernel; content = pack. Depends on Phase 4 + solid memory/knowledge subsystem.
+### Phase 5 — operator frontend (`specs/005-operator-frontend`) — **SHIPPED**
+> Number note: the `005` slot was taken by this operator frontend (built ad hoc after Phase 4). The *experiential knowledge loop* originally sketched as "Spec 005" is now a future spec (see Phase 6 below) — same concept, later number.
+
+**Status: SHIPPED on branch `005-operator-frontend`** (commits `5d2c42d` docs → `3fd5b1a` backend → `25c55e9` SPA+docker → `4eb9575` contract test → `77363db` domain panels). **26/32 tasks; 226 passed; SPA builds clean; svelte-check 0.**
+
+A single-operator web console — a **second composition root** over the kernel + `AUDIT_PACK` (imports them directly like `cli.py`, not a fork): FastAPI backend + Svelte SPA. Delivered:
+- **US1** — start a folder-bound session, drive turns (`loop.run_turn`), watch the ReAct steps stream over a WebSocket live trace.
+- **US2 (security)** — the FR-009 **deliberate two-step** confirmation gate: a `confirm_token` issued only on fetching an action's notice, one-shot; approval routes through the SAME kernel `resolve_confirmation` as `sr-agent confirm`. No reflexive click / no auto-approve. Proven by `tests/frontend/test_approval_gate.py` (G1–G4).
+- **US6** — set the reasoning endpoint (localhost / cloud-GPU tunnel) + model + an EXPLICIT `local|paid` selector + optional write-only paid key + a warm button (ready vs reachable). Paid backend is never a silent fallback. Proven by `test_no_paid_api.py`.
+- **US5** — health (ready vs available), active pack + tools + the kernel invariants a pack cannot weaken, and **pack-contributed domain panels** (`GET /api/domain/panels` → audit findings/PoC roadmap, tagged by pack; generic surface stays pack-agnostic — SC-008).
+- **US3** — read-only HMAC memory browser (tier-tagged, no edit/delete).
+
+**One additive kernel change:** an optional, observability-only `event_sink` on `OrchestratorLoop` (feeds the live trace) — `None`-safe, swallows its own exceptions, cannot change control flow or any invariant; existing suite stays green.
+
+**Deferred (6 tasks, none block the milestone):**
+- **US4 provenance** (T024–26): `GET /api/session/{id}/context` + Provenance/Escalation panels. Deferred because it needs a small **kernel-state addition** (persist the last turn's DATA-wrapped blocks) — weigh against the "004 additive-observability-only" line. Trust tiers are already visible in the LiveTrace / Memory / System panels.
+- **US3 audit trail** (T022–23): `GET /api/audit` + AuditTrail panel — a time-ordered re-projection of append-only memory; largely duplicates the shipped Memory panel.
+- **T031**: `docker build` + `docker compose up` end-to-end run-through (needs the operator's docker daemon; the SPA build + backend-serves-`dist/` were verified locally).
+
+### Phase 6 — experiential knowledge loop (future spec)
+Capture-always → reactive candidate queue (`sr-agent lessons` list/show/approve/dismiss, mirroring `sr-agent confirm`) → human command promotes → embed (HMAC-signed; pack content) → retrieve-at-build as **suggestion, not control** (v1). Dedup by error-signature to keep the human queue low-noise. Mechanism = kernel; content = pack. Depends on Phase 4 + solid memory/knowledge subsystem. (The ready knowledge-base entries below seed this.)
 
 ## Ready knowledge-base entries (pending human command)
 Gotchas the human has confirmed reproducible — seed entries for Phase 5's store:
@@ -70,8 +89,12 @@ Gotchas the human has confirmed reproducible — seed entries for Phase 5's stor
 10. **`forge --offline` is genuinely the right flag for a network-isolated sandbox, but only when NOT combined with `--use`** (confirmed upstream bug, [foundry-rs/foundry#2412](https://github.com/foundry-rs/foundry/issues/2412) — `--offline` is silently ignored when `--use` is also passed, so the command still phones home). Also: a pragma caret range (`^0.8.28`) resolves at *build* time to whatever the *latest* matching release was then (e.g. `0.8.35`, not `0.8.28`) — if you later pass `--use 0.8.28` expecting that to match the cached version, it won't, and forge tries to fetch the literal (uncached) 0.8.28 instead. Omit `--use` entirely and let `--offline` auto-detect from pragma against whatever's actually cached.
 11. **A free `cloudflared` "quick tunnel" (`trycloudflare.com`) has an idle-connection timeout of roughly 60–100s** (confirmed via community reports, not official docs — cloudflared's HTTP/2 origin connection idle-timeout and common-proxy 524 boundaries both cited around this range). An Ollama call made with `stream: false` sends the client **zero bytes** until the entire generation finishes — from the tunnel's point of view that's one long idle period, and on a slow model/long output it gets cut mid-generation. The client then reads a truncated-but-still-JSON-parseable partial response (`done: false`, no `done_reason`) and silently treats it as real output — root-caused 2026-07-02 via directly probing Ollama through the tunnel and observing `done: False` on a cut-short `SharesCooldown` PoC draft. **Fix**: use `stream: true` (NDJSON) through any tunnel/proxy — continuous byte flow reads as "not idle" and avoids the cutoff; the client must reassemble the streamed chunks itself instead of reading one final JSON object.
 
-## Current focus (2026-07): validate PoC-writing workability
-Before implementing Phase 4, test whether the agent can draft a proof-of-code for **all** findings in the pashov audit report (`<strata-bb>/audit/contracts-pashov-ai-audit-report-*.md`). Include ALL findings — no prefiltering (a prior audit missed a vuln from exactly that assumption). This exercises the `write_poc`→`run_tests` path (feature 003 `execute_confirmed`, Foundry `audit/poc/` profile) end-to-end on real contracts.
+## Current focus (2026-07)
+Phase 4 (kernel↔pack boundary) and Phase 5 (operator frontend) have both landed. Two open threads:
+
+**(paused) Validate PoC-writing workability** — test whether the LOCAL-MODEL agent can draft a proof-of-code for **all** findings in the pashov audit report (`<strata-bb>/audit/contracts-pashov-ai-audit-report-*.md`), composing its own detection+PoC task list. Include ALL findings — no prefiltering (a prior audit missed a vuln from exactly that assumption). Exercises the `write_poc`→`run_tests` path end-to-end on real contracts. Blocked on hardware (needs a fresh Colab T4 + cloudflared tunnel); next lever = `forge -vvvv` + grounding (transitive imports / few-shot from existing repo PoCs). Infra gotchas #3–#11 below were all found here.
+
+**(optional) Frontend remainder** — the 6 deferred Phase-5 tasks (US4 provenance, US3 audit trail, T031 docker run-through) — see Phase 5.
 
 ## Open questions (deferred, not blocking)
 - Pack interface exact shape — **RESOLVED** in Spec 004 (Target A; `CapabilityPack` frozen dataclass + `PackContext`, see research.md).
