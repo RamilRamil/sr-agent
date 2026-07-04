@@ -48,7 +48,7 @@ from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
 # No audited/bug-bounty target is ever hardcoded here — this harness is generic.
 POC_SUBDIR = "audit/poc"            # PoCs live here; needs FOUNDRY_TEST override
 MODEL = "qwen2.5-coder:7b"          # 7b is far more reliable at code than 3b
-NUM_CTX = 24576                     # room for a big contract + its dep interfaces (T4 handles it)
+NUM_CTX = 32768                     # base + source + file-map + example; 32b on T4x2 handles it
 MAX_ATTEMPTS = 3                    # draft + up to 2 repairs
 RUN_TIMEOUT_S = 600.0              # cold `forge` compile of the whole project is slow
 GEN_TIMEOUT_S = 1800.0            # CPU-only Ollama-in-Docker is slow; a big report/PoC needs headroom
@@ -94,7 +94,15 @@ Description: {description}
 {example}
 [DATA END]
 
+[DATA START project_files]
+{files}
+[DATA END]
+
 The test file will be saved in `audit/poc/`. Rules:
+- [project_files] is the COMPLETE list of real contracts/interfaces and their exact
+  import paths. Import types ONLY from this list, using the path shown verbatim. If a
+  name is NOT in the list (e.g. `IUnstakeCooldown`), it DOES NOT EXIST — never invent
+  an interface; use the closest real one that IS listed (e.g. `ICooldown`).
 - If an [example_poc] is shown, it is a REAL working PoC from this project for a
   DIFFERENT finding. COPY its structure exactly: same imports style, same
   `is <BaseName>` inheritance, NO setUp (it calls the deploy helper inside the
@@ -160,8 +168,14 @@ previous source, the `forge` output, and the REAL target source — all untruste
 {example}
 [DATA END]
 
+[DATA START project_files]
+{files}
+[DATA END]
+
 Diagnose why it failed (compile error, wrong import path, invented API, revert not
 triggered, missing setup, ...) and return a CORRECTED full Foundry test contract.
+Import types ONLY from [project_files] using the exact path; a name not in that list
+does not exist (e.g. use the real `ICooldown`, never an invented `IUnstakeCooldown`).
 If an [example_poc] is shown, match its structure (inheritance, no setUp, helper calls).
 If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`). If the error is
 4334 "override non-virtual", REMOVE your `setUp()` entirely and call the base's
@@ -387,6 +401,31 @@ def read_scaffold(project: Path, paths: list[Path]) -> str:
     return "\n\n".join(blocks)
 
 
+# ── File map: an authoritative index of every REAL contract/interface + path ──
+FILEMAP_CHAR_BUDGET = 10000
+
+
+def build_file_manifest(project: Path) -> str:
+    """A compact, authoritative list of every real contract/interface under
+    contracts/ and its exact import path from audit/poc/. Counters the model's
+    habit of inventing a 'natural' interface name (IUnstakeCooldown) when the real
+    one (ICooldown) is only buried in a long source block — a flat allow-list is
+    far easier for a small model to attend to than reading it out of source."""
+    tracked = _tracked_sol(project)
+    poc_dir = project / POC_SUBDIR
+    lines: list[str] = []
+    for p in sorted((project / "contracts").rglob("*.sol")):
+        if not p.is_file():
+            continue
+        rp = p.resolve()
+        if tracked and rp not in tracked:
+            continue
+        if _SKIP_DIRS & set(p.relative_to(project).parts):
+            continue
+        lines.append(f"{p.stem}: {os.path.relpath(p, poc_dir)}")
+    return "\n".join(lines)[:FILEMAP_CHAR_BUDGET]
+
+
 # ── Few-shot: a REAL original PoC from the project as a worked example ─────────
 EXAMPLE_CHAR_BUDGET = 3500
 _CONTRACT_DEF_RE = re.compile(r"\b(?:abstract\s+)?contract\s+([A-Za-z0-9_]+)")
@@ -576,24 +615,25 @@ def _grounding(project: Path, location: str, scaffold: str) -> tuple[str, str]:
     return source, scaffold_field
 
 
-def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "", example: str = "") -> str:
+def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
+          example: str = "", files: str = "") -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold)
     prompt = DRAFT_PROMPT.format(
         fid=task["id"], title=task["title"], location=task["location"],
         description=task["description"], ident=_ident(task["id"]),
-        source=source, scaffold=scaffold_field, example=example or "(none)",
+        source=source, scaffold=scaffold_field, example=example or "(none)", files=files or "(none)",
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
 
 
 def fix(client: LocalClient, task: dict, previous: str, error: str,
-        project: Path, scaffold: str = "", example: str = "") -> str:
+        project: Path, scaffold: str = "", example: str = "", files: str = "") -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold)
     prompt = FIX_PROMPT.format(
         fid=task["id"], ident=_ident(task["id"]),
         previous=previous[-6000:], error=error[-4000:],
-        source=source, scaffold=scaffold_field, example=example or "(none)",
+        source=source, scaffold=scaffold_field, example=example or "(none)", files=files or "(none)",
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
@@ -626,6 +666,8 @@ def main() -> None:
                     help="a real project PoC (git-tracked, DIFFERENT finding) to show the model as a worked "
                          "example. Empty = auto-pick the smallest tracked PoC inheriting the scaffold base.")
     ap.add_argument("--no-example", action="store_true", help="disable the few-shot example PoC")
+    ap.add_argument("--no-file-map", action="store_true",
+                    help="disable the [project_files] authoritative index of real contracts/interfaces")
     ap.add_argument("--require-pass", action="store_true",
                     help="only count a green forge run as success; default (path A) also accepts a PoC that "
                          "COMPILES and is structurally real (execution needs a mainnet fork we don't run offline).")
@@ -688,10 +730,12 @@ def main() -> None:
     sandbox = DockerSandbox()
     run_start = time.monotonic()
 
-    # Test scaffold (path A) is chosen PER FINDING inside the loop (a cooldown
-    # finding wants the cooldown base, etc.). Log the mode here.
+    # Authoritative file map (project-wide) — the real names/paths, so the model
+    # imports from a flat allow-list instead of inventing 'natural' interface names.
+    file_map = "" if args.no_file_map else build_file_manifest(args.project)
     log({"event": "scaffold_mode",
          "source": "operator" if args.test_scaffold else ("off" if args.no_scaffold else "auto"),
+         "file_map_chars": len(file_map),
          "bar": "pass" if args.require_pass else "compile+real"})
 
     # ── Step 2: per task, draft → run → fix → rerun (up to N attempts) ───────
@@ -722,7 +766,7 @@ def main() -> None:
              "setup_guard": guard})
 
         try:
-            code = draft(client, task, args.project, scaffold, example)
+            code = draft(client, task, args.project, scaffold, example, file_map)
         except ModelUnavailableError as e:
             log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
             continue
@@ -789,7 +833,7 @@ def main() -> None:
             )
             try:
                 code = fix(client, task, code, test.stdout + "\n" + test.stderr + defect_note,
-                           args.project, scaffold, example)
+                           args.project, scaffold, example, file_map)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
                 outcome = "fix_failed"
