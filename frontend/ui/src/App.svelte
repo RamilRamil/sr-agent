@@ -6,6 +6,7 @@
   import SystemPanel from "./panels/SystemPanel.svelte";
   import Memory from "./panels/Memory.svelte";
   import DomainPanels from "./panels/DomainPanels.svelte";
+  import TunnelIndicator from "./panels/TunnelIndicator.svelte";
 
   let sessionId: string | null = null;
   let projectId: string | null = null;
@@ -24,7 +25,10 @@
 <header>
   <div class="row" style="justify-content: space-between; align-items: baseline;">
     <h1 style="margin: 0; font-size: 18px;">SR-agent · <span class="muted">operator console</span></h1>
-    <span class="muted mono">single operator · local model · no paid API required</span>
+    <div class="row" style="gap: 14px;">
+      <TunnelIndicator />
+      <span class="muted mono">single operator · local model · no paid API</span>
+    </div>
   </div>
 </header>
 

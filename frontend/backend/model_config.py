@@ -57,6 +57,39 @@ def set_config(endpoint: str | None = None, model: str | None = None,
     return CONFIG.public()
 
 
+# ── Tunnel keep-alive + liveness indicator (US6) ─────────────────────────────
+# A light periodic ping keeps a cloudflared quick tunnel's connection from idling
+# out (~60-100s idle timeout — roadmap gotcha #11) and feeds the live UI dot.
+_HEARTBEAT: dict = {"state": "unknown", "endpoint": None, "model": None, "checked_at": None, "fails": 0}
+
+
+def heartbeat_once() -> dict:
+    """One light liveness ping (GET /api/tags) against the current endpoint. Keeps
+    the tunnel connection warm and refreshes the indicator state. Never raises."""
+    client = CONFIG.local_client()
+    try:
+        ok = client.available()
+    except Exception:
+        ok = False
+    _HEARTBEAT["endpoint"] = CONFIG.endpoint
+    _HEARTBEAT["model"] = client.model
+    _HEARTBEAT["checked_at"] = time.time()
+    if ok:
+        _HEARTBEAT.update(state="up", fails=0)
+    else:
+        _HEARTBEAT["fails"] = _HEARTBEAT.get("fails", 0) + 1
+        _HEARTBEAT["state"] = "down"
+    return dict(_HEARTBEAT)
+
+
+def heartbeat_state() -> dict:
+    """The last observed liveness (cheap read — no tunnel traffic)."""
+    s = dict(_HEARTBEAT)
+    if s.get("checked_at") is not None:
+        s["age_s"] = round(time.time() - s["checked_at"], 1)
+    return s
+
+
 def warm() -> dict:
     """Load the model and report state — distinguishes ready from reachable (FR-020).
 

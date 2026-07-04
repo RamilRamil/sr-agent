@@ -51,6 +51,15 @@ export interface WarmResult {
   elapsed_s: number;
 }
 
+export interface Heartbeat {
+  state: "up" | "down" | "unknown";
+  endpoint: string | null;
+  model: string | null;
+  checked_at: number | null;
+  fails: number;
+  age_s?: number;
+}
+
 export interface SessionView {
   session_id: string;
   project_id: string;
@@ -106,6 +115,7 @@ export const api = {
     paid_key?: string;
   }) => post("/api/model/config", b).then(j<ModelConfig>),
   warm: () => post("/api/model/warm", {}).then(j<WarmResult>),
+  heartbeat: () => fetch("/api/model/heartbeat").then(j<Heartbeat>),
 
   startSession: (project_path: string, project_id?: string) =>
     post("/api/session", { project_path, project_id }).then(

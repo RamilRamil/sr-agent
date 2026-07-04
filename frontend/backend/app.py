@@ -22,10 +22,28 @@ from frontend.backend import confirm, events, model_config, state
 from frontend.backend.sessions import SessionManager
 
 
+HEARTBEAT_INTERVAL_S = 30  # < cloudflared idle timeout (~60-100s) — keeps the tunnel warm
+
+
+async def _heartbeat_loop() -> None:
+    """Periodic light ping so a cloudflared tunnel never idles out, and the UI
+    indicator stays fresh — runs as long as the backend does (roadmap gotcha #11)."""
+    while True:
+        try:
+            await run_in_threadpool(model_config.heartbeat_once)
+        except Exception:
+            pass  # keep-alive must never crash the server
+        await asyncio.sleep(HEARTBEAT_INTERVAL_S)
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     events.bind_loop(asyncio.get_running_loop())  # let the sync event_sink cross into the WS loop
-    yield
+    hb = asyncio.create_task(_heartbeat_loop())
+    try:
+        yield
+    finally:
+        hb.cancel()
 
 
 app = FastAPI(title="SR-agent operator frontend", lifespan=_lifespan)
@@ -65,6 +83,12 @@ def post_model_config(body: dict) -> dict:
 @app.post("/api/model/warm")
 async def post_warm() -> dict:
     return await run_in_threadpool(model_config.warm)
+
+
+@app.get("/api/model/heartbeat")
+def get_heartbeat() -> dict:
+    """Live tunnel/model liveness for the indicator (kept fresh by the keep-alive loop)."""
+    return model_config.heartbeat_state()
 
 
 # ── Session (US1) ─────────────────────────────────────────────────────────────

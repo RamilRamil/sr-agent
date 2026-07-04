@@ -73,3 +73,22 @@ def test_default_backend_is_local_not_paid(client):
 def test_backend_must_be_local_or_paid(client):
     r = client.post("/api/model/config", json={"backend": "nonsense"})
     assert r.status_code == 400
+
+
+# ── Tunnel keep-alive indicator (US6) ─────────────────────────────────────────
+
+def test_heartbeat_endpoint_shape(client):
+    r = client.get("/api/model/heartbeat")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["state"] in ("up", "down", "unknown")
+    for key in ("endpoint", "model", "checked_at", "fails"):
+        assert key in body
+
+
+def test_heartbeat_ping_never_raises_and_marks_down_when_unreachable():
+    # With no Ollama at the endpoint, one ping resolves to a clean "down".
+    model_config.set_config(endpoint="http://127.0.0.1:1")  # nothing listens here
+    state = model_config.heartbeat_once()
+    assert state["state"] == "down"
+    assert state["endpoint"] == "http://127.0.0.1:1"
