@@ -528,33 +528,37 @@ def _fix_setup_override(code: str) -> tuple[str, bool]:
 
 
 def _fix_import_paths(code: str, project: Path) -> tuple[str, bool]:
-    """The model picks the right import TARGET but often the wrong relative depth
-    (`../../../` vs `../../`). We know the real paths — rewrite each relative import
-    of a real project .sol to its exact relpath from audit/poc/. Remapped/library
-    imports (@openzeppelin/…, forge-std/…) are left as-is. Prefers git-tracked
-    (original) files so it never rewrites toward one of our generated PoCs."""
+    """Fix mechanical codegen issues, LINE BY LINE so non-import lines are never
+    touched: (a) a bare `SPDX-License-Identifier` line missing its `//` (a 2314
+    syntax error), and (b) an import with the right target but wrong relative depth
+    (`../../../` vs `../../`) — we know the real paths, so rewrite to the exact
+    relpath from audit/poc/. Remapped/library imports (@openzeppelin/…, forge-std/…)
+    are left as-is; git-tracked (original) files are preferred."""
     poc_dir = project / POC_SUBDIR
     tracked = _tracked_sol(project)
     changed = False
-
-    def repl(m: "re.Match") -> str:
-        nonlocal changed
-        full, path = m.group(0), m.group(1)
-        if not path.endswith(".sol") or path.startswith("@") or path.startswith("forge-std"):
-            return full
-        cands = [p for p in project.rglob(Path(path).name)
-                 if p.is_file() and not _SKIP_DIRS & set(p.relative_to(project).parts)]
-        if tracked:
-            cands = [p for p in cands if p.resolve() in tracked] or cands
-        if not cands:
-            return full
-        correct = os.path.relpath(cands[0], poc_dir)
-        if correct != path:
+    out: list[str] = []
+    for line in code.splitlines():
+        s = line.lstrip()
+        if s.startswith("SPDX-License-Identifier"):
+            line = line.replace("SPDX-License-Identifier", "// SPDX-License-Identifier", 1)
             changed = True
-            return full.replace(path, correct)
-        return full
-
-    return re.sub(r'import[^;]*?["\']([^"\']+)["\']', repl, code), changed
+        elif s.startswith("import"):
+            mo = re.search(r'["\']([^"\']+\.sol)["\']', line)
+            if mo:
+                path = mo.group(1)
+                if not (path.startswith("@") or path.startswith("forge-std")):
+                    cands = [p for p in project.rglob(Path(path).name)
+                             if p.is_file() and not _SKIP_DIRS & set(p.relative_to(project).parts)]
+                    if tracked:
+                        cands = [p for p in cands if p.resolve() in tracked] or cands
+                    if cands:
+                        correct = os.path.relpath(cands[0], poc_dir)
+                        if correct != path:
+                            line = line.replace(path, correct)
+                            changed = True
+        out.append(line)
+    return "\n".join(out), changed
 
 
 _ASSERT_RE = re.compile(
