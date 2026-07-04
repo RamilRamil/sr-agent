@@ -94,6 +94,12 @@ The test file will be saved in `audit/poc/`. Rules:
   `x.balanceOf_[...]` unless it appears verbatim above).
 - If you need a token/vault, use the real interface shown; deal with the real
   contracts, not invented mocks.
+- NEVER re-declare, mock, or reimplement a target/dependency contract inside the
+  test file (no `contract TargetName {{ ... }}` of your own) — import and deploy the REAL one.
+- The test MUST be complete and executable: deploy/obtain the real contract(s),
+  call real functions to set up the described state, and end with an ACTIVE
+  assertion (assertEq/assertTrue/vm.expectRevert). Do NOT leave the body commented
+  out, empty, or a placeholder skeleton — an empty test that "passes" is a FAILURE.
 
 Write a single Foundry test contract (pragma solidity ^0.8.28) named PoC_{ident}
 that imports {{Test}} from "forge-std/Test.sol", sets up the minimal state
@@ -251,6 +257,40 @@ def read_location_source(project: Path, location: str) -> str:
     return "\n\n".join(blocks)
 
 
+_ASSERT_RE = re.compile(
+    r"\b(assertEq|assertTrue|assertFalse|assertGt|assertGe|assertLt|assertLe|"
+    r"assertNotEq|assertApproxEqAbs|expectRevert|expectEmit)\b"
+)
+
+
+def _strip_comments(sol: str) -> str:
+    sol = re.sub(r"/\*.*?\*/", "", sol, flags=re.DOTALL)
+    return re.sub(r"//[^\n]*", "", sol)
+
+
+def _poc_defects(code: str, target_stems: list[str]) -> list[str]:
+    """Structural checks that catch PoCs which compile/pass but PROVE NOTHING —
+    the model's evasions (observed 2026-07-05): an empty/fully-commented skeleton
+    that 'passes' with ~0 gas, the target re-declared as an inline mock, or the
+    target referenced without importing it. A vacuous pass is worse than a fail —
+    it hides the failure — so these downgrade a pass to a repairable failure."""
+    body = _strip_comments(code)
+    defects: list[str] = []
+    if not _ASSERT_RE.search(body):
+        defects.append("no active assertion/expectRevert — the test is empty or fully "
+                       "commented out (a vacuous test that reproduces nothing).")
+    for stem in target_stems:
+        if re.search(rf"\bcontract\s+{re.escape(stem)}\b", body):
+            defects.append(f"re-declares the real contract `{stem}` inline (a mock) — you MUST "
+                           f"import the real one via its given path, never mock or reimplement it.")
+    if target_stems:
+        imports = re.findall(r'import[^;]*?["\']([^"\']+)["\']', body)
+        if not any(any(s in imp for s in target_stems) for imp in imports):
+            defects.append("does not import the real target contract — add an import using the "
+                           "exact path from its source-block header.")
+    return defects
+
+
 def draft(client: LocalClient, task: dict, project: Path) -> str:
     source = read_location_source(project, task["location"])
     prompt = DRAFT_PROMPT.format(
@@ -368,6 +408,7 @@ def main() -> None:
 
         outcome = "unknown"
         res = None
+        target_stems = [Path(n).stem for n in dict.fromkeys(_SOL_FILE_RE.findall(task["location"]))]
         for attempt in range(1, args.attempts + 1):
             res = write_poc(fid, poc_dir, generator=lambda _f, c=code: c)
             rel = str(res.path.relative_to(args.project))
@@ -389,20 +430,31 @@ def main() -> None:
                 outcome = "run_error"
                 break
 
+            # A pass only counts if the PoC is structurally real (not vacuous/mocked).
+            defects = _poc_defects(code, target_stems)
+            real_pass = test.passed and not defects
             log({
                 "event": "tested", "finding_id": fid, "attempt": attempt,
-                "passed": test.passed, "exit_code": test.exit_code,
+                "passed": test.passed, "real_pass": real_pass, "defects": defects,
+                "exit_code": test.exit_code,
                 "stdout_tail": test.stdout[-1200:], "stderr_tail": test.stderr[-1200:],
             })
-            if test.passed:
+            if real_pass:
                 outcome = "passed"
                 break
+            if test.passed and defects:
+                log({"event": "rejected_vacuous", "finding_id": fid, "attempt": attempt, "defects": defects})
             if attempt == args.attempts:
-                outcome = "exhausted"
+                outcome = "vacuous_pass" if test.passed else "exhausted"
                 break
-            # Feed the forge output back so the model can repair.
+            # Feed the forge output AND the structural defects back so the model repairs
+            # both the compile and the "prove nothing" evasions.
+            defect_note = (
+                "\n\nSTRUCTURAL PROBLEMS — the test compiles/passes but proves nothing; fix ALL:\n- "
+                + "\n- ".join(defects) if defects else ""
+            )
             try:
-                code = fix(client, task, code, test.stdout + "\n" + test.stderr, args.project)
+                code = fix(client, task, code, test.stdout + "\n" + test.stderr + defect_note, args.project)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
                 outcome = "fix_failed"
