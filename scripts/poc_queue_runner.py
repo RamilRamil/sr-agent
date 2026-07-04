@@ -168,8 +168,10 @@ def extract_tasks(client: LocalClient, report_path: Path) -> list[dict]:
 
 _SOL_FILE_RE = re.compile(r"[\w./-]+\.sol")
 _IMPORT_RE = re.compile(r'import\s+(?:[^"\';]*\bfrom\s+)?["\']([^"\']+)["\']')
-SOURCE_CHAR_BUDGET = 18000  # target + dep interfaces; stays within num_ctx w/ output room
-PRIMARY_CHAR_CAP = 11000    # cap the target file so its dep interfaces are never starved
+SOURCE_CHAR_BUDGET = 26000  # target + transitive dep interfaces; within num_ctx w/ output room
+PRIMARY_CHAR_CAP = 10000    # cap each target file so its dep interfaces are never starved
+IMPORT_DEPTH = 2            # follow local imports 2 levels: base contracts (access-control,
+                            # cooldown base, …) reach the model, not just direct interfaces
 _SKIP_DIRS = {"out", "cache_forge", "node_modules", "lib", "artifacts"}
 
 
@@ -214,6 +216,7 @@ def read_location_source(project: Path, location: str) -> str:
         imp = os.path.relpath(path, poc_dir)   # exact import path from audit/poc/
         blocks.append(f'// [{kind}] import this file as: "{imp}"\n{text}')
 
+    frontier: list[tuple[Path, int]] = []   # (file, depth) to walk for transitive deps
     for name in names:
         # forge's build output mirrors "Contract.sol" as a DIRECTORY of artifacts
         # (out/Contract.sol/…) — exclude build/vendor dirs so we only match source.
@@ -226,8 +229,25 @@ def read_location_source(project: Path, location: str) -> str:
             continue
         primary = matches[0]
         emit(primary, "target")
-        for dep in _resolve_local_imports(primary, primary.read_text(encoding="utf-8", errors="replace")):
-            emit(dep, "dependency")       # real interfaces, not invented mocks
+        frontier.append((primary, 0))
+
+    # BFS over LOCAL imports up to IMPORT_DEPTH — so base contracts (custom
+    # access-control, cooldown base, …) reach the model, not just the direct
+    # interfaces. The char budget bounds how much actually gets included; role
+    # setup was the wall once imports were fixed (observed 2026-07-04: 14b assumed
+    # OZ grantRole/DEFAULT_ADMIN_ROLE, absent on the protocol's custom base).
+    while frontier and budget > 0:
+        path, depth = frontier.pop(0)
+        if depth >= IMPORT_DEPTH:
+            continue
+        try:
+            txt = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for dep in _resolve_local_imports(path, txt):
+            if dep not in seen:
+                emit(dep, "dependency")       # real interfaces, not invented mocks
+                frontier.append((dep, depth + 1))
     return "\n\n".join(blocks)
 
 
