@@ -90,7 +90,16 @@ Description: {description}
 {scaffold}
 [DATA END]
 
+[DATA START example_poc]
+{example}
+[DATA END]
+
 The test file will be saved in `audit/poc/`. Rules:
+- If an [example_poc] is shown, it is a REAL working PoC from this project for a
+  DIFFERENT finding. COPY its structure exactly: same imports style, same
+  `is <BaseName>` inheritance, NO setUp (it calls the deploy helper inside the
+  test), same helper calls (`_deploy...`, `_deposit`, `_grantRole`). Only change
+  the exploit body to reproduce THIS finding.
 - If a real base is shown in [test_scaffold], your PoC MUST inherit it
   (`contract PoC_{ident} is <BaseName>`) and follow the base's OWN usage pattern:
   - Do NOT declare a `setUp()` at all — the base's setUp is NOT virtual, so
@@ -144,8 +153,13 @@ previous source, the `forge` output, and the REAL target source — all untruste
 {scaffold}
 [DATA END]
 
+[DATA START example_poc]
+{example}
+[DATA END]
+
 Diagnose why it failed (compile error, wrong import path, invented API, revert not
 triggered, missing setup, ...) and return a CORRECTED full Foundry test contract.
+If an [example_poc] is shown, match its structure (inheritance, no setUp, helper calls).
 If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`). If the error is
 4334 "override non-virtual", REMOVE your `setUp()` entirely and call the base's
 deploy helper (e.g. `_deployStrataStack()`) as the first line of the test instead.
@@ -367,6 +381,107 @@ def read_scaffold(project: Path, paths: list[Path]) -> str:
     return "\n\n".join(blocks)
 
 
+# ── Few-shot: a REAL original PoC from the project as a worked example ─────────
+EXAMPLE_CHAR_BUDGET = 3500
+_CONTRACT_DEF_RE = re.compile(r"\b(?:abstract\s+)?contract\s+([A-Za-z0-9_]+)")
+
+
+def resolve_example(project: Path, spec: str, disabled: bool,
+                    base_paths: list[Path], exclude_stems: list[str] | None = None) -> Path | None:
+    """A real, git-TRACKED PoC that inherits the scaffold base — a worked example of
+    the project's own pattern (a small model copies an example far better than it
+    follows prose rules). Operator can pin one via --example-poc; else auto-pick the
+    SMALLEST tracked PoC inheriting the base, excluding the base itself and any file
+    whose name references THIS finding's target (never leak the finding's own answer)."""
+    if disabled:
+        return None
+    for token in spec.split(","):
+        token = token.strip()
+        if token:
+            p = Path(token)
+            p = p if p.is_absolute() else (project / token)
+            if p.is_file():
+                return p.resolve()
+    if not base_paths:
+        return None
+    base_names = set()
+    for bp in base_paths:
+        base_names.update(_CONTRACT_DEF_RE.findall(bp.read_text(encoding="utf-8", errors="replace")))
+    tracked = _tracked_sol(project)
+    test_dir = project / _foundry_test_dir(project)
+    if not test_dir.is_dir() or not base_names:
+        return None
+    excl = [s.lower() for s in (exclude_stems or [])]
+    cands = []
+    for f in test_dir.rglob("*.sol"):
+        rp = f.resolve()
+        if tracked and rp not in tracked:      # original only
+            continue
+        if rp in {b.resolve() for b in base_paths}:
+            continue
+        if any(x in f.name.lower() for x in excl):  # don't hand it this finding's own answer
+            continue
+        txt = f.read_text(encoding="utf-8", errors="replace")
+        inherits = any(re.search(rf"\bis\b[^\{{]*\b{re.escape(bn)}\b", txt) for bn in base_names)
+        if not (inherits and _ASSERT_RE.search(txt)):
+            continue
+        # prefer examples that model the CORRECT pattern (no own setUp — they call the
+        # deploy helper inside the test); rank them ahead of any that override setUp.
+        has_setup = bool(re.search(r"\bfunction\s+setUp\b", txt))
+        cands.append((has_setup, len(txt), rp))
+    if not cands:
+        return None
+    return min(cands)[2]        # (no-setUp first, then smallest) — cleanest, fits budget
+
+
+def read_example(project: Path, path: Path | None) -> str:
+    if path is None:
+        return ""
+    text = path.read_text(encoding="utf-8", errors="replace")[:EXAMPLE_CHAR_BUDGET]
+    return f"// a REAL PoC from this project (different finding) — copy its structure:\n{text}"
+
+
+# ── Deterministic setUp guard: a small model keeps overriding the base's ───────
+# non-virtual setUp (compile error 4334) despite instructions. Fix it in code
+# rather than hoping the prompt sticks: strip the override, move its statements
+# (minus super.setUp) to the top of the first test function.
+def _base_has_nonvirtual_setup(scaffold: str) -> bool:
+    return bool(re.search(r"function\s+setUp\s*\([^)]*\)\s*(?:public|external)(?![^\{;]*\bvirtual\b)", scaffold))
+
+
+def _brace_block(s: str, open_idx: int) -> int:
+    depth = 0
+    for i in range(open_idx, len(s)):
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _fix_setup_override(code: str) -> tuple[str, bool]:
+    """Remove a PoC's own setUp() (which would 4334 against a non-virtual base) and
+    re-inject its statements at the top of the first test function. Returns
+    (code, changed)."""
+    m = re.search(r"function\s+setUp\s*\([^)]*\)[^{]*\{", code)
+    if not m:
+        return code, False
+    close = _brace_block(code, m.end() - 1)
+    if close < 0:
+        return code, False
+    body = code[m.end():close]
+    stmts = "\n".join(l for l in body.splitlines() if "super.setUp" not in l).strip()
+    code2 = (code[:m.start()] + code[close + 1:]).replace("\n\n\n", "\n\n")
+    tm = re.search(r"function\s+test\w*\s*\([^)]*\)[^{]*\{", code2)
+    if tm and stmts:
+        ins = tm.end()
+        indented = "\n        " + stmts.replace("\n", "\n        ")
+        code2 = code2[:ins] + indented + code2[ins:]
+    return code2, True
+
+
 _ASSERT_RE = re.compile(
     r"\b(assertEq|assertTrue|assertFalse|assertGt|assertGe|assertLt|assertLe|"
     r"assertNotEq|assertApproxEqAbs|expectRevert|expectEmit)\b"
@@ -413,7 +528,7 @@ def _grounding(project: Path, location: str, scaffold: str) -> tuple[str, str]:
     """Source grounding + scaffold. With a scaffold the base carries the setup, so
     the raw source is trimmed (depth 1, smaller budget) to keep room in num_ctx."""
     if scaffold:
-        source = read_location_source(project, location, depth=1, budget=14000)
+        source = read_location_source(project, location, depth=1, budget=12000)
         scaffold_field = scaffold
     else:
         source = read_location_source(project, location)
@@ -421,24 +536,24 @@ def _grounding(project: Path, location: str, scaffold: str) -> tuple[str, str]:
     return source, scaffold_field
 
 
-def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "") -> str:
+def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "", example: str = "") -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold)
     prompt = DRAFT_PROMPT.format(
         fid=task["id"], title=task["title"], location=task["location"],
         description=task["description"], ident=_ident(task["id"]),
-        source=source, scaffold=scaffold_field,
+        source=source, scaffold=scaffold_field, example=example or "(none)",
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
 
 
 def fix(client: LocalClient, task: dict, previous: str, error: str,
-        project: Path, scaffold: str = "") -> str:
+        project: Path, scaffold: str = "", example: str = "") -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold)
     prompt = FIX_PROMPT.format(
         fid=task["id"], ident=_ident(task["id"]),
         previous=previous[-6000:], error=error[-4000:],
-        source=source, scaffold=scaffold_field,
+        source=source, scaffold=scaffold_field, example=example or "(none)",
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
@@ -467,6 +582,10 @@ def main() -> None:
                          "PoC/test BASE(s) for the model to inherit as deploy scaffolding — never a "
                          "per-finding answer PoC. Empty = auto-discover the most-inherited *Base*.")
     ap.add_argument("--no-scaffold", action="store_true", help="disable scaffold injection + auto-discovery")
+    ap.add_argument("--example-poc", default=os.environ.get("POC_EXAMPLE", ""),
+                    help="a real project PoC (git-tracked, DIFFERENT finding) to show the model as a worked "
+                         "example. Empty = auto-pick the smallest tracked PoC inheriting the scaffold base.")
+    ap.add_argument("--no-example", action="store_true", help="disable the few-shot example PoC")
     ap.add_argument("--require-pass", action="store_true",
                     help="only count a green forge run as success; default (path A) also accepts a PoC that "
                          "COMPILES and is structurally real (execution needs a mainnet fork we don't run offline).")
@@ -547,19 +666,30 @@ def main() -> None:
         started = time.time()
         log({"event": "task_start", "finding_id": fid, "title": task["title"]})
 
-        # Per-finding scaffold: the project's PoC base for THIS finding's target
-        # (a cooldown finding → the cooldown base, virtual setUp so it overrides).
+        # Per-finding grounding: the project's PoC base (scaffold) + a real worked
+        # example (few-shot). Both git-tracked/original; the example excludes this
+        # finding's own name so it's never the answer.
         target_stems = [Path(n).stem for n in dict.fromkeys(_SOL_FILE_RE.findall(task["location"]))]
         scaffold_paths = resolve_scaffold(args.project, args.test_scaffold, args.no_scaffold, target_stems)
         scaffold = read_scaffold(args.project, scaffold_paths)
-        log({"event": "scaffold", "finding_id": fid,
-             "files": [str(p.relative_to(args.project)) for p in scaffold_paths]})
+        example_path = resolve_example(args.project, args.example_poc, args.no_example,
+                                       scaffold_paths, exclude_stems=[fid, *target_stems])
+        example = read_example(args.project, example_path)
+        guard = bool(scaffold) and _base_has_nonvirtual_setup(scaffold)
+        log({"event": "grounding", "finding_id": fid,
+             "scaffold": [str(p.relative_to(args.project)) for p in scaffold_paths],
+             "example": str(example_path.relative_to(args.project)) if example_path else None,
+             "setup_guard": guard})
 
         try:
-            code = draft(client, task, args.project, scaffold)
+            code = draft(client, task, args.project, scaffold, example)
         except ModelUnavailableError as e:
             log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
             continue
+        if guard:
+            code, changed = _fix_setup_override(code)
+            if changed:
+                log({"event": "postfix_setup", "finding_id": fid, "stage": "draft"})
 
         outcome = "unknown"
         res = None
@@ -616,11 +746,15 @@ def main() -> None:
             )
             try:
                 code = fix(client, task, code, test.stdout + "\n" + test.stderr + defect_note,
-                           args.project, scaffold)
+                           args.project, scaffold, example)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
                 outcome = "fix_failed"
                 break
+            if guard:
+                code, changed = _fix_setup_override(code)
+                if changed:
+                    log({"event": "postfix_setup", "finding_id": fid, "stage": f"fix{attempt}"})
 
         # `forge test --match-path` only selects which tests RUN, not which
         # files get COMPILED — every *.t.sol under FOUNDRY_TEST is compiled as
