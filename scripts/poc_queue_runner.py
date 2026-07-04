@@ -110,8 +110,11 @@ The test file will be saved in `audit/poc/`. Rules:
     seeding helpers literally shown in [test_scaffold]) over calling methods on the
     deployed contracts. Do NOT guess method names on `cdo`/vaults/etc. — if a method
     is not shown verbatim in the base or target source, do not call it.
-  - Use the base's already-deployed state variables; do NOT redeploy, re-import,
-    or mock what the base provides.
+  - Use the base's already-deployed state variables; do NOT redeploy or mock what
+    the base provides. BUT Solidity imports are file-scoped and are NOT inherited:
+    you MUST import every interface/type you reference in the body (e.g. `IERC20`,
+    `IUnstakeCooldown`, error selectors) using the paths shown in the source blocks,
+    even though the base already imports them.
 - Import each contract using EXACTLY the path in its source-block header
   (`// [target] import this file as: "..."`) — do NOT guess `./Name.sol`.
 - Use ONLY functions, state variables, errors, and events that literally appear
@@ -165,7 +168,10 @@ If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`). If the error i
 deploy helper (e.g. `_deployStrataStack()`) as the first line of the test instead.
 If the error is "member not found", you invented a method — use the base's helper
 functions (`_deposit`, `_grantRole`, …) shown in [test_scaffold], not guessed
-methods on the deployed contracts.
+methods on the deployed contracts. If the error is "Undeclared identifier" for a
+TYPE (e.g. `IERC20`, `IUnstakeCooldown`), you used it without importing it —
+Solidity imports are file-scoped and NOT inherited from the base, so add the import
+using the path shown in the source blocks.
 Import each file using EXACTLY the path in its source-block header; use ONLY
 functions/state/events that literally appear in target_source — if the error is
 "not found"/"undeclared identifier", you invented something not in the real source.
@@ -493,7 +499,7 @@ def _strip_comments(sol: str) -> str:
     return re.sub(r"//[^\n]*", "", sol)
 
 
-def _poc_defects(code: str, target_stems: list[str]) -> list[str]:
+def _poc_defects(code: str, target_stems: list[str], scaffold_used: bool = False) -> list[str]:
     """Structural checks that catch PoCs which compile/pass but PROVE NOTHING —
     the model's evasions (observed 2026-07-05): an empty/fully-commented skeleton
     that 'passes' with ~0 gas, the target re-declared as an inline mock, or the
@@ -508,7 +514,11 @@ def _poc_defects(code: str, target_stems: list[str]) -> list[str]:
         if re.search(rf"\bcontract\s+{re.escape(stem)}\b", body):
             defects.append(f"re-declares the real contract `{stem}` inline (a mock) — you MUST "
                            f"import the real one via its given path, never mock or reimplement it.")
-    if target_stems:
+    # When a scaffold base is inherited, the base deploys+provides the target
+    # contracts (used via inherited state), so the PoC need NOT import the target
+    # itself — only flag the missing import in the non-scaffold path.
+    inherits_base = scaffold_used and re.search(r"\bcontract\s+\w+\s+is\s+\w", body)
+    if target_stems and not inherits_base:
         imports = re.findall(r'import[^;]*?["\']([^"\']+)["\']', body)
         if not any(any(s in imp for s in target_stems) for imp in imports):
             defects.append("does not import the real target contract — add an import using the "
@@ -715,7 +725,7 @@ def main() -> None:
                 break
 
             # A result only counts if the PoC is structurally real (not vacuous/mocked).
-            defects = _poc_defects(code, target_stems)
+            defects = _poc_defects(code, target_stems, scaffold_used=bool(scaffold))
             compiled = _compiled(test.stdout, test.stderr)
             real_pass = test.passed and not defects
             compiled_real = compiled and not defects   # path-A bar: builds + structurally real
