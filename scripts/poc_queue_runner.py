@@ -286,6 +286,9 @@ def main() -> None:
     ap.add_argument("--attempts", type=int, default=MAX_ATTEMPTS, help="draft + repairs per task")
     ap.add_argument("--limit", type=int, default=0, help="PoC only the first N tasks (0 = all); extraction always covers the whole report")
     ap.add_argument("--extract-only", action="store_true", help="just print the model's task list and exit")
+    ap.add_argument("--max-minutes", type=float, default=0,
+                    help="stop starting new findings after this wall-clock budget (0 = no cap). "
+                         "Bounds a metered cloud-GPU session — remember to Stop the session after.")
     args = ap.parse_args()
 
     poc_dir = args.project / POC_SUBDIR
@@ -343,10 +346,17 @@ def main() -> None:
 
     todo = tasks[: args.limit] if args.limit else tasks
     sandbox = DockerSandbox()
+    run_start = time.monotonic()
 
     # ── Step 2: per task, draft → run → fix → rerun (up to N attempts) ───────
     for task in todo:
         fid = task["id"]
+        # Wall-clock budget: never START a finding past the cap, so a metered
+        # cloud-GPU session stays bounded (the operator still Stops the session).
+        if args.max_minutes and (time.monotonic() - run_start) / 60 >= args.max_minutes:
+            log({"event": "budget_reached", "max_minutes": args.max_minutes,
+                 "done_before_stop": todo.index(task)})
+            break
         started = time.time()
         log({"event": "task_start", "finding_id": fid, "title": task["title"]})
 
