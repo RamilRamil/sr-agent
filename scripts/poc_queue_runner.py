@@ -92,12 +92,17 @@ Description: {description}
 
 The test file will be saved in `audit/poc/`. Rules:
 - If a real base is shown in [test_scaffold], your PoC MUST inherit it
-  (`contract PoC_{ident} is <BaseName>`). Follow the base's OWN usage pattern shown
-  in its source: call its deploy helper (e.g. a `_deploy...()` function) as the FIRST
-  line of your test to bring up the protocol, then USE its deployed state variables
-  and helper functions (the deployed contracts, `_grantRole`, deposit/seed helpers).
-  Do NOT redeploy, re-import, or mock what the base provides. Do NOT override the
-  base's setUp unless the base declares it `virtual`.
+  (`contract PoC_{ident} is <BaseName>`) and follow the base's OWN usage pattern:
+  - Do NOT declare a `setUp()` at all — the base's setUp is NOT virtual, so
+    overriding it fails to compile (error 4334). Instead, call the base's deploy
+    helper (e.g. `_deployStrataStack()` / `_deploy...()`, shown in the base source)
+    as the FIRST statement INSIDE your test function.
+  - PREFER the base's own helper functions (e.g. `_deposit`, `_grantRole`, the
+    seeding helpers literally shown in [test_scaffold]) over calling methods on the
+    deployed contracts. Do NOT guess method names on `cdo`/vaults/etc. — if a method
+    is not shown verbatim in the base or target source, do not call it.
+  - Use the base's already-deployed state variables; do NOT redeploy, re-import,
+    or mock what the base provides.
 - Import each contract using EXACTLY the path in its source-block header
   (`// [target] import this file as: "..."`) — do NOT guess `./Name.sol`.
 - Use ONLY functions, state variables, errors, and events that literally appear
@@ -141,8 +146,12 @@ previous source, the `forge` output, and the REAL target source — all untruste
 
 Diagnose why it failed (compile error, wrong import path, invented API, revert not
 triggered, missing setup, ...) and return a CORRECTED full Foundry test contract.
-If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`) and use its
-deployed state/helpers instead of redeploying or mocking.
+If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`). If the error is
+4334 "override non-virtual", REMOVE your `setUp()` entirely and call the base's
+deploy helper (e.g. `_deployStrataStack()`) as the first line of the test instead.
+If the error is "member not found", you invented a method — use the base's helper
+functions (`_deposit`, `_grantRole`, …) shown in [test_scaffold], not guessed
+methods on the deployed contracts.
 Import each file using EXACTLY the path in its source-block header; use ONLY
 functions/state/events that literally appear in target_source — if the error is
 "not found"/"undeclared identifier", you invented something not in the real source.
