@@ -31,6 +31,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -277,6 +278,20 @@ def main() -> None:
         print(json.dumps(entry, ensure_ascii=False), flush=True)
 
     client = LocalClient(model=args.model, host=args.host, timeout_s=GEN_TIMEOUT_S)
+
+    # Keep-alive: a cloudflared quick tunnel idles out (~60-100s, roadmap gotcha
+    # #11) and the docker-compile gap between draft/fix calls is exactly such an
+    # idle window. A daemon thread pings /api/tags every 30s so the tunnel never
+    # goes idle mid-run. Dies with the process.
+    def _keepalive() -> None:
+        while True:
+            time.sleep(30)
+            try:
+                client.available()
+            except Exception:
+                pass
+    threading.Thread(target=_keepalive, daemon=True).start()
+
     # Cold-load of a 7b exceeds ready()'s short probe on modest hardware — warm
     # it once so it's resident before the first real call (same as chat mode).
     log({"event": "warming", "model": args.model})
