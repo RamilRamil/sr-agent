@@ -85,7 +85,16 @@ Description: {description}
 {source}
 [DATA END]
 
+[DATA START test_scaffold]
+{scaffold}
+[DATA END]
+
 The test file will be saved in `audit/poc/`. Rules:
+- If a real base is shown in [test_scaffold], your PoC MUST inherit it
+  (`contract PoC_{ident} is <BaseName>`), override setUp as
+  `function setUp() public override {{ super.setUp(); }}`, and USE its
+  already-deployed state + helpers (the deployed contracts, `_grantRole`, seeding
+  helpers) — do NOT redeploy, re-import, or mock what the base already provides.
 - Import each contract using EXACTLY the path in its source-block header
   (`// [target] import this file as: "..."`) — do NOT guess `./Name.sol`.
 - Use ONLY functions, state variables, errors, and events that literally appear
@@ -123,8 +132,14 @@ previous source, the `forge` output, and the REAL target source — all untruste
 {source}
 [DATA END]
 
+[DATA START test_scaffold]
+{scaffold}
+[DATA END]
+
 Diagnose why it failed (compile error, wrong import path, invented API, revert not
 triggered, missing setup, ...) and return a CORRECTED full Foundry test contract.
+If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`) and use its
+deployed state/helpers instead of redeploying or mocking.
 Import each file using EXACTLY the path in its source-block header; use ONLY
 functions/state/events that literally appear in target_source — if the error is
 "not found"/"undeclared identifier", you invented something not in the real source.
@@ -194,14 +209,16 @@ def _resolve_local_imports(source_path: Path, text: str) -> list[Path]:
     return out
 
 
-def read_location_source(project: Path, location: str) -> str:
-    """Resolve every *.sol in `location`, plus one level of their local imports,
+def read_location_source(project: Path, location: str,
+                         depth: int = IMPORT_DEPTH, budget: int = SOURCE_CHAR_BUDGET) -> str:
+    """Resolve every *.sol in `location`, plus `depth` levels of their local imports,
     and return each as a DATA block whose header gives the EXACT import path to
     use from audit/poc/. Grounds the draft in (a) the real contract API and
     (b) the real import paths + dependency interfaces — the two things the model
     otherwise invents (docs/roadmap.md gotcha #5; observed 2026-07-04: 14b guessed
     `./StrataCDO.sol` and invented `IERC20.mint`/`balanceOf_` mocks, failing every
-    attempt on File-not-found / undeclared-identifier compile errors).
+    attempt on File-not-found / undeclared-identifier compile errors). `depth`/`budget`
+    are trimmed when a test scaffold is also supplied (the scaffold carries the setup).
     """
     names = dict.fromkeys(_SOL_FILE_RE.findall(location))  # de-dup, preserve order
     if not names:
@@ -209,7 +226,6 @@ def read_location_source(project: Path, location: str) -> str:
     poc_dir = project / POC_SUBDIR       # where the test file will live
     seen: set[Path] = set()
     blocks: list[str] = []
-    budget = SOURCE_CHAR_BUDGET
 
     def emit(path: Path, kind: str) -> None:
         nonlocal budget
@@ -243,8 +259,8 @@ def read_location_source(project: Path, location: str) -> str:
     # setup was the wall once imports were fixed (observed 2026-07-04: 14b assumed
     # OZ grantRole/DEFAULT_ADMIN_ROLE, absent on the protocol's custom base).
     while frontier and budget > 0:
-        path, depth = frontier.pop(0)
-        if depth >= IMPORT_DEPTH:
+        path, node_depth = frontier.pop(0)
+        if node_depth >= depth:
             continue
         try:
             txt = path.read_text(encoding="utf-8", errors="replace")
@@ -253,7 +269,76 @@ def read_location_source(project: Path, location: str) -> str:
         for dep in _resolve_local_imports(path, txt):
             if dep not in seen:
                 emit(dep, "dependency")       # real interfaces, not invented mocks
-                frontier.append((dep, depth + 1))
+                frontier.append((dep, node_depth + 1))
+    return "\n\n".join(blocks)
+
+
+# ── Test scaffold (path A): hand the model the project's PoC/test base to inherit ──
+SCAFFOLD_CHAR_BUDGET = 13000   # the project's deploy base(s); trims the source grounding
+_BASE_INHERIT_RE = re.compile(r"\bis\s+([A-Za-z0-9_]*(?:Base|Setup|Deploy|Harness|Fixture))\b")
+
+
+def _foundry_test_dir(project: Path) -> str:
+    toml = project / "foundry.toml"
+    if toml.is_file():
+        m = re.search(r'^\s*test\s*=\s*[\'"]([^\'"]+)', toml.read_text(errors="replace"), re.M)
+        if m:
+            return m.group(1)
+    return "test"
+
+
+def resolve_scaffold(project: Path, spec: str, disabled: bool) -> list[Path]:
+    """Operator-provided scaffold file(s) (--test-scaffold / POC_SCAFFOLD), else a
+    light auto-discovery: the most-inherited *Base* under the project's test dir.
+    A scaffold is shared deploy INFRASTRUCTURE, never a per-finding answer PoC — the
+    operator is trusted to point at a base, and auto-discovery only picks a *Base*."""
+    if disabled:
+        return []
+    out: list[Path] = []
+    for token in spec.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        p = Path(token)
+        p = p if p.is_absolute() else (project / token)
+        if p.is_file():
+            out.append(p.resolve())
+    if out:
+        return out
+    # auto-discover: most-inherited *Base* contract in the test dir
+    test_dir = project / _foundry_test_dir(project)
+    if not test_dir.is_dir():
+        return []
+    counts: dict[str, int] = {}
+    files = list(test_dir.rglob("*.sol"))
+    for f in files:
+        for name in _BASE_INHERIT_RE.findall(f.read_text(encoding="utf-8", errors="replace")):
+            counts[name] = counts.get(name, 0) + 1
+    if not counts:
+        return []
+    texts = {f: f.read_text(encoding="utf-8", errors="replace") for f in files}
+    # try candidates most-inherited first; return the first whose DEFINITION file
+    # we can locate under the test dir (some bases live outside it — skip those).
+    for name in sorted(counts, key=counts.get, reverse=True):
+        for f, txt in texts.items():
+            if re.search(rf"\b(?:abstract\s+)?contract\s+{re.escape(name)}\b", txt):
+                return [f.resolve()]
+    return []
+
+
+def read_scaffold(project: Path, paths: list[Path]) -> str:
+    """Render scaffold file(s) as DATA blocks with the exact import path to inherit."""
+    if not paths:
+        return ""
+    poc_dir = project / POC_SUBDIR
+    blocks, budget = [], SCAFFOLD_CHAR_BUDGET
+    for p in paths:
+        if budget <= 0:
+            break
+        text = p.read_text(encoding="utf-8", errors="replace")[:budget]
+        budget -= len(text)
+        imp = os.path.relpath(p, poc_dir)
+        blocks.append(f'// [test_scaffold] the project\'s PoC base — INHERIT it; import as: "{imp}"\n{text}')
     return "\n\n".join(blocks)
 
 
@@ -291,21 +376,44 @@ def _poc_defects(code: str, target_stems: list[str]) -> list[str]:
     return defects
 
 
-def draft(client: LocalClient, task: dict, project: Path) -> str:
-    source = read_location_source(project, task["location"])
+def _compiled(stdout: str, stderr: str) -> bool:
+    """Did the PoC COMPILE (path-A success bar)? A runtime revert (no mainnet fork
+    offline) is NOT a compile failure — distinguish 'Compiler run failed' from a
+    test that built but reverted."""
+    blob = stdout + "\n" + stderr
+    return "Compiler run failed" not in blob and "Compilation failed" not in blob
+
+
+def _grounding(project: Path, location: str, scaffold: str) -> tuple[str, str]:
+    """Source grounding + scaffold. With a scaffold the base carries the setup, so
+    the raw source is trimmed (depth 1, smaller budget) to keep room in num_ctx."""
+    if scaffold:
+        source = read_location_source(project, location, depth=1, budget=14000)
+        scaffold_field = scaffold
+    else:
+        source = read_location_source(project, location)
+        scaffold_field = "(no base provided — deploy the real contracts yourself; still NEVER mock them)"
+    return source, scaffold_field
+
+
+def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "") -> str:
+    source, scaffold_field = _grounding(project, task["location"], scaffold)
     prompt = DRAFT_PROMPT.format(
         fid=task["id"], title=task["title"], location=task["location"],
-        description=task["description"], ident=_ident(task["id"]), source=source,
+        description=task["description"], ident=_ident(task["id"]),
+        source=source, scaffold=scaffold_field,
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
 
 
-def fix(client: LocalClient, task: dict, previous: str, error: str, project: Path) -> str:
+def fix(client: LocalClient, task: dict, previous: str, error: str,
+        project: Path, scaffold: str = "") -> str:
+    source, scaffold_field = _grounding(project, task["location"], scaffold)
     prompt = FIX_PROMPT.format(
         fid=task["id"], ident=_ident(task["id"]),
         previous=previous[-6000:], error=error[-4000:],
-        source=read_location_source(project, task["location"]),
+        source=source, scaffold=scaffold_field,
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
@@ -329,6 +437,14 @@ def main() -> None:
     ap.add_argument("--max-minutes", type=float, default=0,
                     help="stop starting new findings after this wall-clock budget (0 = no cap). "
                          "Bounds a metered cloud-GPU session — remember to Stop the session after.")
+    ap.add_argument("--test-scaffold", default=os.environ.get("POC_SCAFFOLD", ""),
+                    help="comma-separated .sol file(s) (project-relative or absolute): the project's "
+                         "PoC/test BASE(s) for the model to inherit as deploy scaffolding — never a "
+                         "per-finding answer PoC. Empty = auto-discover the most-inherited *Base*.")
+    ap.add_argument("--no-scaffold", action="store_true", help="disable scaffold injection + auto-discovery")
+    ap.add_argument("--require-pass", action="store_true",
+                    help="only count a green forge run as success; default (path A) also accepts a PoC that "
+                         "COMPILES and is structurally real (execution needs a mainnet fork we don't run offline).")
     args = ap.parse_args()
 
     poc_dir = args.project / POC_SUBDIR
@@ -388,6 +504,13 @@ def main() -> None:
     sandbox = DockerSandbox()
     run_start = time.monotonic()
 
+    # Test scaffold (path A): the project's PoC/test base for the model to inherit,
+    # so it uses the real deploy setup instead of mocking/redeploying it.
+    scaffold_paths = resolve_scaffold(args.project, args.test_scaffold, args.no_scaffold)
+    scaffold = read_scaffold(args.project, scaffold_paths)
+    log({"event": "scaffold", "files": [str(p.relative_to(args.project)) for p in scaffold_paths]
+         if scaffold_paths else [], "bar": "pass" if args.require_pass else "compile+real"})
+
     # ── Step 2: per task, draft → run → fix → rerun (up to N attempts) ───────
     for task in todo:
         fid = task["id"]
@@ -401,7 +524,7 @@ def main() -> None:
         log({"event": "task_start", "finding_id": fid, "title": task["title"]})
 
         try:
-            code = draft(client, task, args.project)
+            code = draft(client, task, args.project, scaffold)
         except ModelUnavailableError as e:
             log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
             continue
@@ -430,31 +553,39 @@ def main() -> None:
                 outcome = "run_error"
                 break
 
-            # A pass only counts if the PoC is structurally real (not vacuous/mocked).
+            # A result only counts if the PoC is structurally real (not vacuous/mocked).
             defects = _poc_defects(code, target_stems)
+            compiled = _compiled(test.stdout, test.stderr)
             real_pass = test.passed and not defects
+            compiled_real = compiled and not defects   # path-A bar: builds + structurally real
             log({
                 "event": "tested", "finding_id": fid, "attempt": attempt,
-                "passed": test.passed, "real_pass": real_pass, "defects": defects,
+                "passed": test.passed, "compiled": compiled, "real_pass": real_pass,
+                "compiled_real": compiled_real, "defects": defects,
                 "exit_code": test.exit_code,
                 "stdout_tail": test.stdout[-1200:], "stderr_tail": test.stderr[-1200:],
             })
             if real_pass:
-                outcome = "passed"
+                outcome = "passed"                     # full success: green + real
+                break
+            if compiled_real and not args.require_pass:
+                outcome = "compiled"                   # path-A success: builds + real (fork deferred)
                 break
             if test.passed and defects:
                 log({"event": "rejected_vacuous", "finding_id": fid, "attempt": attempt, "defects": defects})
             if attempt == args.attempts:
-                outcome = "vacuous_pass" if test.passed else "exhausted"
+                outcome = ("vacuous_pass" if test.passed else
+                           "compile_only_defective" if compiled else "exhausted")
                 break
             # Feed the forge output AND the structural defects back so the model repairs
             # both the compile and the "prove nothing" evasions.
             defect_note = (
-                "\n\nSTRUCTURAL PROBLEMS — the test compiles/passes but proves nothing; fix ALL:\n- "
+                "\n\nSTRUCTURAL PROBLEMS — the test builds but proves nothing; fix ALL:\n- "
                 + "\n- ".join(defects) if defects else ""
             )
             try:
-                code = fix(client, task, code, test.stdout + "\n" + test.stderr + defect_note, args.project)
+                code = fix(client, task, code, test.stdout + "\n" + test.stderr + defect_note,
+                           args.project, scaffold)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
                 outcome = "fix_failed"
@@ -465,8 +596,9 @@ def main() -> None:
         # one project, so a left-behind broken PoC from an earlier finding
         # fails EVERY later finding's compile too (confirmed 2026-07-02: H-02's
         # run failed on H-01's stale import error, not its own). Quarantine any
-        # non-passing PoC out of poc_dir so later findings aren't blocked by it.
-        if outcome != "passed" and res is not None:
+        # non-COMPILING PoC out of poc_dir so later findings aren't blocked by it.
+        # A "compiled" (path-A) PoC stays: it builds, so it never blocks a later compile.
+        if outcome not in ("passed", "compiled") and res is not None:
             quarantine_dir = poc_dir.parent / "poc_failed"
             quarantine_dir.mkdir(parents=True, exist_ok=True)
             dest = quarantine_dir / res.path.name
