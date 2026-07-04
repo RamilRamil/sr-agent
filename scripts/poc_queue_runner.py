@@ -249,6 +249,16 @@ def extract_tasks(client: LocalClient, report_path: Path) -> list[dict]:
 
 _SOL_FILE_RE = re.compile(r"[\w./-]+\.sol")
 _IMPORT_RE = re.compile(r'import\s+(?:[^"\';]*\bfrom\s+)?["\']([^"\']+)["\']')
+# Candidate contract names from a finding location, whether the model wrote it as
+# 'Foo.sol:bar()', 'Foo.sol', or 'Foo.bar' (it varies). PascalCase tokens are the
+# contract names; lowercase method names (coverage, transfer) are ignored.
+_LOC_NAME_RE = re.compile(r"[A-Za-z_][\w]*\.sol|[A-Z][A-Za-z0-9]+")
+
+
+def _location_names(location: str) -> list[str]:
+    return list(dict.fromkeys(
+        (t[:-4] if t.endswith(".sol") else t) for t in _LOC_NAME_RE.findall(location)
+    ))
 SOURCE_CHAR_BUDGET = 26000  # target + transitive dep interfaces; within num_ctx w/ output room
 PRIMARY_CHAR_CAP = 10000    # cap each target file so its dep interfaces are never starved
 IMPORT_DEPTH = 2            # follow local imports 2 levels: base contracts (access-control,
@@ -280,9 +290,9 @@ def read_location_source(project: Path, location: str,
     attempt on File-not-found / undeclared-identifier compile errors). `depth`/`budget`
     are trimmed when a test scaffold is also supplied (the scaffold carries the setup).
     """
-    names = dict.fromkeys(_SOL_FILE_RE.findall(location))  # de-dup, preserve order
+    names = _location_names(location)    # contract names, with or without .sol
     if not names:
-        return "(no .sol file found in location — task location was not a file path)"
+        return "(no contract name found in location)"
     poc_dir = project / POC_SUBDIR       # where the test file will live
     seen: set[Path] = set()
     blocks: list[str] = []
@@ -303,11 +313,10 @@ def read_location_source(project: Path, location: str,
         # forge's build output mirrors "Contract.sol" as a DIRECTORY of artifacts
         # (out/Contract.sol/…) — exclude build/vendor dirs so we only match source.
         matches = [
-            p for p in project.rglob(Path(name).name)
+            p for p in project.rglob(f"{name}.sol")
             if p.is_file() and not _SKIP_DIRS & set(p.relative_to(project).parts)
         ]
         if not matches:
-            blocks.append(f"// {name}: NOT FOUND under {project}")
             continue
         primary = matches[0]
         emit(primary, "target")
@@ -451,7 +460,7 @@ def build_callable_api(project: Path, location: str) -> str:
     real SIGNATURES so the model stops guessing methods/args (observed 2026-07-05:
     32b called `ICooldown.requestUnstake(3 args)` when the real method is
     `transfer(4 args)` — the signature was only buried in the source block)."""
-    names = dict.fromkeys(_SOL_FILE_RE.findall(location))
+    names = _location_names(location)
     if not names:
         return ""
     seen: set[Path] = set()
@@ -475,7 +484,7 @@ def build_callable_api(project: Path, location: str) -> str:
             blocks.append(f"// {path.stem} — real callable signatures:\n{body}")
 
     for name in names:
-        matches = [p for p in project.rglob(Path(name).name)
+        matches = [p for p in project.rglob(f"{name}.sol")
                    if p.is_file() and not _SKIP_DIRS & set(p.relative_to(project).parts)]
         if not matches:
             continue
@@ -821,7 +830,7 @@ def main() -> None:
         # Per-finding grounding: the project's PoC base (scaffold) + a real worked
         # example (few-shot). Both git-tracked/original; the example excludes this
         # finding's own name so it's never the answer.
-        target_stems = [Path(n).stem for n in dict.fromkeys(_SOL_FILE_RE.findall(task["location"]))]
+        target_stems = _location_names(task["location"])
         scaffold_paths = resolve_scaffold(args.project, args.test_scaffold, args.no_scaffold, target_stems)
         scaffold = read_scaffold(args.project, scaffold_paths)
         example_path = resolve_example(args.project, args.example_poc, args.no_example,
