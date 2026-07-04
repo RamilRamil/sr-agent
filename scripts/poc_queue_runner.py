@@ -98,11 +98,19 @@ Description: {description}
 {files}
 [DATA END]
 
+[DATA START callable_api]
+{callable}
+[DATA END]
+
 The test file will be saved in `audit/poc/`. Rules:
 - [project_files] is the COMPLETE list of real contracts/interfaces and their exact
   import paths. Import types ONLY from this list, using the path shown verbatim. If a
   name is NOT in the list (e.g. `IUnstakeCooldown`), it DOES NOT EXIST — never invent
   an interface; use the closest real one that IS listed (e.g. `ICooldown`).
+- [callable_api] lists the REAL function signatures of the finding's contracts. Call
+  methods ONLY with a name + argument count that appears there verbatim — do NOT
+  guess a method name or the number of arguments (e.g. use `transfer(token, from, to,
+  amount)` if shown, not an invented `requestUnstake(...)`).
 - If an [example_poc] is shown, it is a REAL working PoC from this project for a
   DIFFERENT finding. COPY its structure exactly: same imports style, same
   `is <BaseName>` inheritance, NO setUp (it calls the deploy helper inside the
@@ -172,10 +180,16 @@ previous source, the `forge` output, and the REAL target source — all untruste
 {files}
 [DATA END]
 
+[DATA START callable_api]
+{callable}
+[DATA END]
+
 Diagnose why it failed (compile error, wrong import path, invented API, revert not
 triggered, missing setup, ...) and return a CORRECTED full Foundry test contract.
 Import types ONLY from [project_files] using the exact path; a name not in that list
 does not exist (e.g. use the real `ICooldown`, never an invented `IUnstakeCooldown`).
+Call methods ONLY with a name + argument count shown in [callable_api] — if the error
+is "member not found"/"wrong argument count", pick the real signature listed there.
 If an [example_poc] is shown, match its structure (inheritance, no setUp, helper calls).
 If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`). If the error is
 4334 "override non-virtual", REMOVE your `setUp()` entirely and call the base's
@@ -426,6 +440,52 @@ def build_file_manifest(project: Path) -> str:
     return "\n".join(lines)[:FILEMAP_CHAR_BUDGET]
 
 
+# ── Callable API: the exact function SIGNATURES of the finding's contracts ─────
+CALLABLE_API_BUDGET = 6000
+_FUNC_SIG_RE = re.compile(r"function\s+\w+\s*\([^{};]*\)[^{};]*", re.S)
+
+
+def build_callable_api(project: Path, location: str) -> str:
+    """The exact external/public function SIGNATURES of the finding's target
+    contracts + their direct interfaces. The file map gives real NAMES; this gives
+    real SIGNATURES so the model stops guessing methods/args (observed 2026-07-05:
+    32b called `ICooldown.requestUnstake(3 args)` when the real method is
+    `transfer(4 args)` — the signature was only buried in the source block)."""
+    names = dict.fromkeys(_SOL_FILE_RE.findall(location))
+    if not names:
+        return ""
+    seen: set[Path] = set()
+    blocks: list[str] = []
+    budget = CALLABLE_API_BUDGET
+
+    def emit(path: Path) -> None:
+        nonlocal budget
+        if path in seen or budget <= 0:
+            return
+        seen.add(path)
+        txt = path.read_text(encoding="utf-8", errors="replace")
+        sigs = []
+        for mo in _FUNC_SIG_RE.finditer(txt):
+            sig = re.sub(r"\s+", " ", mo.group(0)).strip()
+            if "external" in sig or "public" in sig:
+                sigs.append(sig + ";")
+        if sigs:
+            body = "\n".join(dict.fromkeys(sigs))[:budget]
+            budget -= len(body)
+            blocks.append(f"// {path.stem} — real callable signatures:\n{body}")
+
+    for name in names:
+        matches = [p for p in project.rglob(Path(name).name)
+                   if p.is_file() and not _SKIP_DIRS & set(p.relative_to(project).parts)]
+        if not matches:
+            continue
+        primary = matches[0]
+        emit(primary)
+        for dep in _resolve_local_imports(primary, primary.read_text(encoding="utf-8", errors="replace")):
+            emit(dep)
+    return "\n\n".join(blocks)
+
+
 # ── Few-shot: a REAL original PoC from the project as a worked example ─────────
 EXAMPLE_CHAR_BUDGET = 3500
 _CONTRACT_DEF_RE = re.compile(r"\b(?:abstract\s+)?contract\s+([A-Za-z0-9_]+)")
@@ -607,11 +667,13 @@ def _compiled(stdout: str, stderr: str) -> bool:
     return "Compiler run failed" not in blob and "Compilation failed" not in blob
 
 
-def _grounding(project: Path, location: str, scaffold: str) -> tuple[str, str]:
-    """Source grounding + scaffold. With a scaffold the base carries the setup, so
-    the raw source is trimmed (depth 1, smaller budget) to keep room in num_ctx."""
+def _grounding(project: Path, location: str, scaffold: str, callable_api: str) -> tuple[str, str]:
+    """Source grounding + scaffold. With a scaffold the base carries the setup, and
+    with a callable_api the signatures are already extracted, so the raw source is
+    trimmed harder to keep everything within num_ctx."""
     if scaffold:
-        source = read_location_source(project, location, depth=1, budget=12000)
+        budget = 8000 if callable_api else 12000
+        source = read_location_source(project, location, depth=1, budget=budget)
         scaffold_field = scaffold
     else:
         source = read_location_source(project, location)
@@ -620,24 +682,26 @@ def _grounding(project: Path, location: str, scaffold: str) -> tuple[str, str]:
 
 
 def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
-          example: str = "", files: str = "") -> str:
-    source, scaffold_field = _grounding(project, task["location"], scaffold)
+          example: str = "", files: str = "", callable_api: str = "") -> str:
+    source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
     prompt = DRAFT_PROMPT.format(
         fid=task["id"], title=task["title"], location=task["location"],
         description=task["description"], ident=_ident(task["id"]),
-        source=source, scaffold=scaffold_field, example=example or "(none)", files=files or "(none)",
+        source=source, scaffold=scaffold_field, example=example or "(none)",
+        files=files or "(none)", callable=callable_api or "(none)",
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
 
 
 def fix(client: LocalClient, task: dict, previous: str, error: str,
-        project: Path, scaffold: str = "", example: str = "", files: str = "") -> str:
-    source, scaffold_field = _grounding(project, task["location"], scaffold)
+        project: Path, scaffold: str = "", example: str = "", files: str = "", callable_api: str = "") -> str:
+    source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
     prompt = FIX_PROMPT.format(
         fid=task["id"], ident=_ident(task["id"]),
         previous=previous[-6000:], error=error[-4000:],
-        source=source, scaffold=scaffold_field, example=example or "(none)", files=files or "(none)",
+        source=source, scaffold=scaffold_field, example=example or "(none)",
+        files=files or "(none)", callable=callable_api or "(none)",
     )
     return _strip_fences(client.generate(
         prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
@@ -763,14 +827,15 @@ def main() -> None:
         example_path = resolve_example(args.project, args.example_poc, args.no_example,
                                        scaffold_paths, exclude_stems=[fid, *target_stems])
         example = read_example(args.project, example_path)
+        callable_api = "" if args.no_file_map else build_callable_api(args.project, task["location"])
         guard = bool(scaffold) and _base_has_nonvirtual_setup(scaffold)
         log({"event": "grounding", "finding_id": fid,
              "scaffold": [str(p.relative_to(args.project)) for p in scaffold_paths],
              "example": str(example_path.relative_to(args.project)) if example_path else None,
-             "setup_guard": guard})
+             "callable_api_chars": len(callable_api), "setup_guard": guard})
 
         try:
-            code = draft(client, task, args.project, scaffold, example, file_map)
+            code = draft(client, task, args.project, scaffold, example, file_map, callable_api)
         except ModelUnavailableError as e:
             log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
             continue
@@ -837,7 +902,7 @@ def main() -> None:
             )
             try:
                 code = fix(client, task, code, test.stdout + "\n" + test.stderr + defect_note,
-                           args.project, scaffold, example, file_map)
+                           args.project, scaffold, example, file_map, callable_api)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
                 outcome = "fix_failed"
