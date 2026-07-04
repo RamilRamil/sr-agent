@@ -19,7 +19,7 @@ Both keep the project root, `src`, `libs`, and remappings intact. A **second `fo
 
 ## Compilation settings
 
-- Inherit `via_ir` from the default profile (Strata contracts require `via_ir=true`; disabling risks stack-too-deep). Cost: slow first compile — accepted; the build cache amortizes it across PoCs in a run.
+- Inherit `via_ir` from the default profile (the target's contracts require `via_ir=true`; disabling risks stack-too-deep). Cost: slow first compile — accepted; the build cache amortizes it across PoCs in a run.
 - Compilation and execution happen only inside `DockerSandbox` (`--network none`, `--cap-drop ALL`, ephemeral) — the generator's Solidity output is untrusted data, never executed on the host.
 
 ## Timeouts

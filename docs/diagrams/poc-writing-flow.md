@@ -1,6 +1,6 @@
 # PoC-writing flow — current execution (scripts/poc_queue_runner.py)
 
-This is the mechanism running in the background right now, writing PoCs for the Strata bug-bounty findings/leads. It is **not** the chat-mode orchestrator from `specs/003-interactive-chat-mode/` — that isn't built yet. It's a standalone script that sequentially drives two existing tool modules (`llm_core/local_client.py`, `tools/write_execute.py` + `tools/sandbox.py`), reading a fixed queue and writing one PoC at a time.
+This is the mechanism that writes PoCs for an external target's audit findings/leads (the target — its contracts, report, and generated PoCs — lives entirely OUTSIDE this repo). It is **not** the chat-mode orchestrator from `specs/003-interactive-chat-mode/` — that isn't built yet. It's a standalone script that sequentially drives two existing tool modules (`llm_core/local_client.py`, `tools/write_execute.py` + `tools/sandbox.py`), reading a fixed queue and writing one PoC at a time.
 
 ```mermaid
 sequenceDiagram
@@ -9,7 +9,7 @@ sequenceDiagram
     participant L as LocalClient (Ollama)
     participant W as write_poc()
     participant D as DockerSandbox
-    participant F as Strata repo<br/>audit/poc/*.t.sol
+    participant F as target repo<br/>audit/poc/*.t.sol
 
     R->>Q: load all 22 items at startup
     loop for each item, one at a time
