@@ -96,6 +96,22 @@ As the operator, I can see whether the agent is ready to work, which modules and
 2. **Given** an active pack, **When** the operator opens the modules view, **Then** the kernel and the active pack are shown with the pack's registered tools.
 3. **Given** the UI is open, **When** the operator opens help, **Then** an architecture reference (kernel/pack + invariants) and a command reference are available.
 
+---
+
+### User Story 6 - Configure the model backend and warm it (Priority: P2)
+
+As the operator, I can, from a settings panel, point the agent at a model backend — the **local-model endpoint** (a host/URL: `localhost` or a tunnel to a cloud GPU) and/or an **optional API key for a stronger paid model** — and I can press a **warm** button to load the model and see its state, so I know the agent is ready before I start a turn.
+
+**Why this priority**: Directly practical — the operator runs a weak local model and often points it at a cloud-GPU tunnel; setting that endpoint in the UI (instead of env vars) and warming it on demand removes real friction. The paid-model key stays strictly optional (the agent must work local-only).
+
+**Independent Test**: Set the local-model endpoint to a reachable host, press warm, and see the state go to ready; clear the endpoint / point it somewhere down and see it reflect not-ready — all without restarting the container.
+
+**Acceptance Scenarios**:
+
+1. **Given** the settings panel, **When** the operator sets the local-model endpoint (host/URL) and model name, **Then** subsequent turns use that endpoint, and the value is not required to be an env var.
+2. **Given** a configured endpoint, **When** the operator presses **warm**, **Then** the model is loaded and the panel shows the resulting state (warming → ready, or failed with the reason), distinguishing ready from merely reachable.
+3. **Given** no paid API key is set, **When** the operator uses the agent, **Then** everything works on the local model / relay (the paid key is optional, never required — Constitution V); **When** a paid key IS provided **and the operator explicitly selects the paid backend**, **Then** the stronger model is used — but an unavailable local model is NEVER silently redirected to it (refuse-and-wait stands unless the operator chose paid).
+
 ### Edge Cases
 
 - **Local model unavailable**: the UI shows a blocked/unavailable state and does not fabricate progress (mirrors the agent's refuse-and-wait behavior); it does not silently fall back to a paid path.
@@ -126,6 +142,9 @@ As the operator, I can see whether the agent is ready to work, which modules and
 - **FR-016**: The UI MUST function against the local model / relay only and MUST NOT require a paid API for any surface.
 - **FR-017**: Domain-specific panels (findings roadmap, PoC status, graph/SIG views) MUST be contributed by the active pack rather than hardcoded; the generic panels (chat, live trace, confirmation queue, memory browser, health, modules) MUST work for any pack.
 - **FR-018**: The UI MUST run locally in a container alongside the existing services, for a single operator — no multi-user, accounts, authentication, or remote/public hosting.
+- **FR-019**: The UI MUST let the operator set, at runtime, the local-model backend — a model name and an endpoint host/URL (e.g. `localhost` or a cloud-GPU tunnel) — without editing env vars or restarting. A change MUST take effect on the current session's next turn (the backend rebuilds that session's reasoning provider from the current config), not only for new sessions.
+- **FR-020**: The UI MUST provide a **warm** control that loads the model and reports the resulting state (warming → ready, or failed with a reason), distinguishing *ready* (can produce output now) from merely *reachable*.
+- **FR-021**: The UI MAY let the operator provide an optional API key for a stronger paid model as an alternative backend. A paid backend is used ONLY when the operator **explicitly selects it** — it MUST NEVER be an automatic or silent fallback for an unavailable/slow local model (that stays refuse-and-wait, per the local-first design). The agent MUST remain fully functional with no key (local model / relay only) — the paid key is never required (Constitution V). A provided key is held only in local process/session state, never written to memory or committed.
 
 ### Key Entities
 
@@ -151,6 +170,8 @@ As the operator, I can see whether the agent is ready to work, which modules and
 - **SC-006**: The operator can determine from the UI whether the agent is ready to work (model ready, sandbox up) and which pack/tools are active, without reading logs.
 - **SC-007**: Every UI surface functions with the local model only — zero dependency on a paid API.
 - **SC-008**: Changing the active pack changes the domain panels while the generic panels continue to work unchanged.
+- **SC-009**: An operator can set the local-model endpoint (e.g. to a tunnel) and warm it from the UI, and see the state reach *ready*, without restarting the container or setting env vars.
+- **SC-010**: With no paid API key configured, 100% of surfaces function on the local model / relay; a paid key, if given, is optional and never persisted to memory.
 
 ## Assumptions
 
