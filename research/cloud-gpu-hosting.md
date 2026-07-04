@@ -85,8 +85,14 @@ Kaggle Notebooks + `ollama serve` + `cloudflared` quick-tunnel, `LocalClient(hos
 
 ## 5. Gotchas (подтверждены на практике)
 
+- **`zstd` нужен установщику Ollama** (подтверждено на Kaggle 2026-07): свежий
+  `install.sh` распаковывает пакет через zstd; в минимальном образе Kaggle его нет →
+  «ERROR: This version requires zstd», бинарник не ставится, дальше `FileNotFoundError:
+  'ollama'`. Ставить `apt-get install -y zstd` ДО `curl … install.sh | sh`.
 - **`pciutils` ДО первого `ollama serve`** (roadmap gotcha #4): без `lspci` Ollama не
   детектит GPU и молча уходит на CPU. Детекция — при старте сервера, не лениво.
+- **`r2u.stat.illinois.edu … Sources`** warning на `apt-get update` в Kaggle — безобидный
+  шум предустановленного R-репозитория; на установку из main-репо не влияет.
 - **cloudflared quick-tunnel idle ~60-100с** (gotcha #11): `stream: true` (NDJSON) внутри
   генерации + in-run keep-alive пинг /api/tags каждые 30с держат соединение.
 - **Internet=On + верификация телефона** — иначе скачать нечего.
