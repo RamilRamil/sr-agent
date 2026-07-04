@@ -117,11 +117,12 @@ The test file will be saved in `audit/poc/`. Rules:
   test), same helper calls (`_deploy...`, `_deposit`, `_grantRole`). Only change
   the exploit body to reproduce THIS finding.
 - If a real base is shown in [test_scaffold], your PoC MUST inherit it
-  (`contract PoC_{ident} is <BaseName>`) and follow the base's OWN usage pattern:
-  - Do NOT declare a `setUp()` at all — the base's setUp is NOT virtual, so
-    overriding it fails to compile (error 4334). Instead, call the base's deploy
-    helper (e.g. `_deployStrataStack()` / `_deploy...()`, shown in the base source)
-    as the FIRST statement INSIDE your test function.
+  (`contract PoC_{ident} is <BaseName>`) and set up EXACTLY like the [example_poc]:
+  - Copy the example's setup pattern precisely. If the example overrides
+    `setUp() public override` with `super.setUp();` + a base setup helper (e.g.
+    `setUpSharesCooldownBase()`), do the same. If instead it calls a deploy helper
+    (e.g. `_deployStrataStack()`) as the first line of the test, do that. Do not
+    invent a different setup.
   - PREFER the base's own helper functions (e.g. `_deposit`, `_grantRole`, the
     seeding helpers literally shown in [test_scaffold]) over calling methods on the
     deployed contracts. Do NOT guess method names on `cdo`/vaults/etc. — if a method
