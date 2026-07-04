@@ -48,7 +48,7 @@ Same tests pass as before the refactor (no net loss of green). Spot-check the tw
 
 ```bash
 # chat still routes/gates/answers as in feature 003
-PYTHONPATH=. .venv/bin/python -m sr_agent.cli chat /path/to/target/contracts --project-id strata-bb
+PYTHONPATH=. .venv/bin/python -m sr_agent.cli chat /path/to/target/contracts --project-id example-project
 ```
 
 ## Read the contract (US4 / SC-005)

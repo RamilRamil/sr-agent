@@ -62,7 +62,7 @@ def _setup(tmp_path, provider):
 
 def test_qa_turn_answers_and_shows_tier(tmp_path):
     loop, session, memory = _setup(tmp_path, FakeProvider(
-        _answer("Finding F1 is a coverage-manipulation bug in StrataCDO.coverage.")
+        _answer("Finding F1 is a reentrancy bug in Vault.withdraw.")
     ))
     result = handle_turn(loop, session, memory, "what is finding F1?")
 
@@ -71,7 +71,7 @@ def test_qa_turn_answers_and_shows_tier(tmp_path):
     assert result.pending_confirmation_id is None          # no write_execute was invoked
     reply = format_reply(result)
     assert reply.startswith("[local]")                     # tier always visible (FR-010/SC-006)
-    assert "coverage-manipulation" in reply
+    assert "reentrancy" in reply
     # the turn was persisted and is resumable
     assert [t.user_message for t in load_turns(session.session_id, "proj", memory)] == ["what is finding F1?"]
 

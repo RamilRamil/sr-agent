@@ -18,7 +18,7 @@ Ollama running with a pulled model — `for_stage2()` prefers `sr-stage2`, then 
 ## Starting a session
 
 ```bash
-PYTHONPATH=. .venv/bin/python -m sr_agent.cli chat /path/to/target/contracts --project-id strata-bb
+PYTHONPATH=. .venv/bin/python -m sr_agent.cli chat /path/to/target/contracts --project-id example-project
 ```
 
 Prints the new `session_id` and drops into a REPL.
@@ -26,7 +26,7 @@ Prints the new `session_id` and drops into a REPL.
 ## Example turn — Q&A (User Story 1)
 
 ```
-> what's the coverage-manipulation exploit path again?
+> what's the reentrancy exploit path again?
 ```
 
 Routes local-first. `SessionFacts.known_finding_ids` already contains the finding if it was recorded via a prior `audit` run against the same `project_id` — the agent answers from that, not from re-deriving it. No tool call needed for a pure recall question; `tool_invocations` on this turn is empty.
@@ -67,7 +67,7 @@ Any request whose action resolves to a `write_execute` type always goes through 
 ## Example turn — local model down (FR-011)
 
 ```
-> show me SharesCooldown.sol
+> show me Vault.sol
 Local model unavailable — turn not processed. Resume once Ollama is reachable:
   sr-agent chat --resume <session_id>
 ```
@@ -78,7 +78,7 @@ No relay fallback happens automatically, even though this particular question co
 
 ```bash
 # Terminal 1
-sr-agent chat /path/to/target --project-id strata-bb
+sr-agent chat /path/to/target --project-id example-project
 > what's finding F1 about?
 <answer>
 ^D

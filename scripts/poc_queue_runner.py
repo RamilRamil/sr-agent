@@ -38,11 +38,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from sr_agent.llm_core.local_client import LocalClient, ModelUnavailableError
 from sr_agent.tools.sandbox import DockerSandbox, SandboxUnavailable
-from sr_agent.tools.write_execute import run_tests, write_poc
+from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
 
 # ── Defaults (overridable via CLI) ───────────────────────────────────────────
-DEFAULT_PROJECT = Path("/Users/ramilmustafin/Projects/Contests/2026-06-strata-bb/contracts")
-DEFAULT_REPORT = DEFAULT_PROJECT / "audit" / "contracts-pashov-ai-audit-report-20260702-073215.md"
+# The target project + audit report are ALWAYS supplied by the operator at the
+# CLI (or via POC_PROJECT / POC_REPORT env) and live entirely OUTSIDE this repo.
+# No audited/bug-bounty target is ever hardcoded here — this harness is generic.
 POC_SUBDIR = "audit/poc"            # PoCs live here; needs FOUNDRY_TEST override
 MODEL = "qwen2.5-coder:7b"          # 7b is far more reliable at code than 3b
 NUM_CTX = 16384                     # Ollama default (2048) truncates a 20KB report
@@ -204,8 +205,10 @@ def fix(client: LocalClient, task: dict, previous: str, error: str) -> str:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--project", type=Path, default=DEFAULT_PROJECT, help="Foundry project root")
-    ap.add_argument("--report", type=Path, default=DEFAULT_REPORT, help="audit report file the model reads")
+    ap.add_argument("--project", type=Path, default=os.environ.get("POC_PROJECT"), required="POC_PROJECT" not in os.environ,
+                    help="Foundry project root of the EXTERNAL target (or env POC_PROJECT). Never hardcoded here.")
+    ap.add_argument("--report", type=Path, default=os.environ.get("POC_REPORT"), required="POC_REPORT" not in os.environ,
+                    help="audit report file the model reads (or env POC_REPORT), inside the external target.")
     ap.add_argument("--model", default=MODEL)
     ap.add_argument("--image", default=None,
                     help="Foundry sandbox image (default: ghcr.io/foundry-rs/foundry:latest). "
@@ -246,9 +249,11 @@ def main() -> None:
         sys.exit(1)
     log({"event": "extracted", "count": len(tasks), "ids": [t["id"] for t in tasks]})
 
-    # Persist the model's task list for inspection / reuse.
+    # Persist the model's task list INTO THE EXTERNAL TARGET (never this repo):
+    # the extracted list carries the target's finding titles/locations, so it
+    # lives beside the PoCs under <project>/audit/poc/, not in the agent tree.
     (poc_dir).mkdir(parents=True, exist_ok=True)
-    (Path(__file__).resolve().parent / "poc_queue.json").write_text(
+    (poc_dir / "_extracted_tasks.json").write_text(
         json.dumps(tasks, indent=2, ensure_ascii=False), encoding="utf-8"
     )
     if args.extract_only:

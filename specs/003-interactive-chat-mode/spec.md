@@ -12,7 +12,7 @@
 
 ### User Story 1 - Ask a question about the audit and get a direct answer (Priority: P1)
 
-An auditor working on a project types a free-form question ("what's the coverage-manipulation exploit path again?", "show me SharesCooldown.sol") and the agent answers by reading memory/files and replying in plain language, without writing or executing anything.
+An auditor working on a project types a free-form question ("what's the reentrancy exploit path again?", "show me Vault.sol") and the agent answers by reading memory/files and replying in plain language, without writing or executing anything.
 
 **Why this priority**: This is the baseline value of a chat interface — replacing manual `sr-agent memory show` / `cat` calls with a natural request. It has zero write-risk, so it validates the routing and DATA-wrapping machinery before any consequential action is layered on top.
 
