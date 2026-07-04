@@ -1,76 +1,76 @@
-# Architecture overview — what's actually wired up
+# Architecture overview — kernel, pack, and the surfaces that drive them
 
-> **Update (feature 003 MVP built):** `orchestrator/loop.py` is **no longer orphaned** — `sr-agent chat` now wires it via `run_turn` + an injected `ChatReasoningProvider` (local-first, no paid API). The "ORPHAN" framing below described the pre-003 state; the loop, `validate_action`, `confirmation.py`, `context.wrap_data`, and `guardrails/escalation.py::evaluate_triggers` are all now reached through the chat path. See [chat-turn-flow.md](chat-turn-flow.md) for the wired flow. The batch-audit path (Stage 1/3 via `ClaudeClient`) remains the one still-unwired consumer of `run()`.
-
-Two distinct things live in this codebase: (1) the **live batch-audit path**, reachable from the `sr-agent` CLI today, and (2) the **agent loop** (`orchestrator/loop.py` + friends) — orphaned before feature 003, now wired by `sr-agent chat`.
+What is actually wired up today, after the **kernel ↔ capability-pack split**
+(spec 004) and the **operator frontend** (spec 005). Two composition roots (the CLI
+and the frontend) build the same task-agnostic [kernel](../kernel.md) and hand it the
+[audit pack](../audit-agent.md). A standalone script drives the PoC-writing experiment
+outside the loop.
 
 ```mermaid
 flowchart TB
-    subgraph CLI["sr_agent/cli.py"]
-        C1["audit / resume"]
-        C2["confirm"]
-        C3["relay"]
-        C4["memory"]
+    subgraph ROOTS["Composition roots"]
+        CLI["sr_agent/cli.py<br/>chat · confirm · relay · memory · audit"]
+        FE["frontend/backend/app.py<br/>FastAPI + Svelte operator console"]
     end
 
-    subgraph LIVE["Live batch-audit path (wired)"]
-        PIPE["orchestrator/pipeline.py<br/>start_audit / resume_audit"]
-        S1["planner/stage1.py<br/>deterministic red flags + SIG"]
-        S2["planner/stage2.py<br/>local model OR relay"]
-        S3["planner/stage3.py<br/>severity correction + SIG combine"]
-        TOOLS_RO["tools/static_analysis.py<br/>tools/smartgraphical.py<br/>(Slither/Mythril/SG, via sandbox)"]
-        LOCAL["llm_core/local_client.py<br/>Ollama"]
-        RELAY["orchestrator/relay.py<br/>manual file relay"]
-        MEM["memory/episodic.py<br/>HMAC-signed JSONL"]
-        REPORT["io/report.py"]
+    subgraph KERNEL["Kernel — task-agnostic (imports zero packs)"]
+        LOOP["orchestrator/loop.py<br/>OrchestratorLoop.run_turn (ReAct)"]
+        ACT["orchestrator/action.py<br/>validate_action — OOB gate from action_class"]
+        CONF["orchestrator/confirmation.py<br/>out-of-band approval"]
+        CTX["orchestrator/context.py<br/>DATA-wrapping every turn"]
+        PACKIF["orchestrator/pack.py<br/>CapabilityPack + PackContext"]
+        GUARD["guardrails/{sanitize,escalation}<br/>generic triggers"]
+        MEM["memory/episodic.py<br/>HMAC append-only, SourceType"]
+        LLM["llm_core/{local_client,chat_reasoning,<br/>relay,router,claude_client}"]
+        SAND["tools/sandbox.py<br/>--network none ephemeral"]
     end
 
-    subgraph ORPHAN["Built but NOT invoked by anything"]
-        LOOP["orchestrator/loop.py<br/>AgentAction ReAct loop"]
-        ACT["orchestrator/action.py<br/>validate_action + REQUIRES_OOB_CONFIRMATION"]
-        CTX["orchestrator/context.py<br/>DATA-wrapping"]
-        CKPT["orchestrator/checkpoint.py"]
-        CLAUDE["llm_core/claude_client.py<br/>paid API, unused by design"]
+    subgraph PACK["sr_agent/packs/audit — the audit capability pack"]
+        APACK["pack.py → AUDIT_PACK"]
+        ADISP["dispatch.py · reasoning.py · escalation.py"]
+        APIPE["pipeline.py · planner/ (stage1-3)"]
+        ATOOLS["tools/{static_analysis,smartgraphical,<br/>onchain,write_execute}"]
+        AMODEL["finding.py (Severity/SIG) · report.py"]
     end
 
-    subgraph WRITE["tools/write_execute.py + tools/sandbox.py"]
-        WPOC["write_poc()"]
-        RTEST["run_tests()"]
-        DEPLOY["deploy_test_contract()"]
+    subgraph EXP["scripts/poc_queue_runner.py — PoC-workability experiment"]
+        RUNNER["standalone: model extracts findings →<br/>grounded draft → sandbox compile → fix loop"]
     end
 
-    subgraph ADHOC["scripts/poc_queue_runner.py — standalone, bypasses ACT"]
-        RUNNER["poc_queue_runner.py"]
-    end
-
-    C1 --> PIPE
-    C2 --> CONF["orchestrator/confirmation.py"]
-    C3 --> RELAY
-    C4 --> MEM
-
-    PIPE --> S1 --> S2 --> S3 --> REPORT
-    S1 --> TOOLS_RO
-    S2 --> LOCAL
-    S2 --> RELAY
-    S3 --> MEM
-
-    LOOP --> ACT
+    CLI --> LOOP
+    FE --> LOOP
+    LOOP --> ACT --> CONF
     LOOP --> CTX
-    LOOP --> CKPT
-    LOOP --> CLAUDE
-    LOOP -.would call.-> WPOC
-    ACT -.gates.-> WPOC
-    ACT -.gates.-> RTEST
-    ACT -.gates.-> DEPLOY
-
-    RUNNER --> LOCAL
-    RUNNER ==bypasses ACT==> WPOC
-    RUNNER --> RTEST
+    LOOP --> GUARD
+    LOOP --> MEM
+    LOOP --> LLM
+    LOOP -->|"narrow PackContext"| PACKIF
+    APACK -->|"injected into"| PACKIF
+    APACK --> ADISP & APIPE & ATOOLS & AMODEL
+    ATOOLS -->|"write_execute ⇒ OOB gate"| ACT
+    ATOOLS --> SAND
+    RUNNER --> LLM
+    RUNNER --> SAND
 ```
 
 ## Reading this
 
-- **Only the `LIVE` subgraph is reachable from the CLI today.** `sr-agent audit` drives Stage 1 → Stage 2 → Stage 3 → report, using either the local Ollama model or the manual relay bridge, never `orchestrator/loop.py`.
-- **`ORPHAN` is real, tested code** (`validate_action`, `REQUIRES_OOB_CONFIRMATION = {write_poc, run_tests, deploy_test_contract}`, DATA-wrapping via `context.wrap_data`) — it's the correctly-gated design for an interactive agent loop. It depends on `llm_core/claude_client.py` (paid Anthropic API), which the project avoids using, and nothing imports `orchestrator/loop.py` — confirmed by `grep`, zero call sites outside its own module.
-- **`write_poc`/`run_tests` are registered in `tools/registry.py` as `write_execute` class, requiring out-of-band confirmation** (`_D_WRITE_POC`: *"Requires prior human out-of-band confirmation"*). That gate is enforced by `orchestrator/action.py::validate_action` — but only code paths that call `validate_action` get the gate. Today that's only `orchestrator/loop.py` (orphaned).
-- **`scripts/poc_queue_runner.py` calls `write_poc`/`run_tests` directly**, importing them straight from `sr_agent.tools.write_execute` — it never touches `validate_action` or the confirmation flow. This was a deliberate, logged simplification (see the script's module docstring) for a low-risk case: writing test files into a local git clone and running `forge test --network none` in an ephemeral container, not touching funds or a live network. It is not what the registered tool description promises, and a real chat-mode implementation must not repeat this shortcut for anything the registry marks `write_execute`.
+- **The kernel is the wired core, not an orphan.** `OrchestratorLoop.run_turn` is
+  reached by both composition roots (`sr-agent chat` and the operator frontend). It
+  owns the control flow and every invariant; see [chat-turn-flow.md](chat-turn-flow.md)
+  for one turn in detail.
+- **The boundary is real and tested.** No kernel module imports `sr_agent.packs`
+  (architecture test). The audit pack reaches the kernel through the single
+  `CapabilityPack` it assembles as `AUDIT_PACK`; the kernel hands pack callables only a
+  narrow `PackContext` (never the loop, never a memory-write handle).
+- **The OOB confirmation gate is kernel-derived.** `validate_action` requires
+  out-of-band approval whenever `action_class == write_execute` (the audit pack's
+  `write_poc`/`run_tests`/`deploy_test_contract`). A pack cannot mark such an action
+  as skip-confirmation — it has no field for it.
+- **`scripts/poc_queue_runner.py` is a standalone experiment**, not the agent: it drives
+  `LocalClient` + the sandbox directly to test whether a local model can draft PoCs
+  end-to-end. It deliberately bypasses `validate_action` for the low-risk case of
+  writing a test file into an external git clone and running `forge test --network none`
+  (logged simplification) — a real chat-mode action must not repeat that shortcut.
+- **The audited target lives entirely outside this repo** (see
+  [audit-agent.md](../audit-agent.md)); the pack reads it at runtime.

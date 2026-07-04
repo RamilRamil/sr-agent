@@ -1,6 +1,6 @@
 # Chat turn flow — `sr-agent chat` (feature 003)
 
-One turn of the interactive chat loop, as actually wired by the MVP. Local-first, no paid API; the same DATA-wrapping / `validate_action` / out-of-band confirmation the batch pipeline uses, reached here through `OrchestratorLoop.run_turn`.
+One turn of the interactive chat loop, through `OrchestratorLoop.run_turn`. Local-first, no paid API. The loop is the task-agnostic [kernel](../kernel.md); the tool dispatch, domain escalation, and finding persistence shown below are supplied by the [audit pack](../audit-agent.md) through its `CapabilityPack` (the kernel keeps the control flow + every invariant). Same DATA-wrapping / `validate_action` / out-of-band confirmation on any surface (CLI or the operator frontend).
 
 ```mermaid
 sequenceDiagram
