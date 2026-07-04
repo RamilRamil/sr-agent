@@ -30,6 +30,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -91,10 +92,12 @@ Description: {description}
 
 The test file will be saved in `audit/poc/`. Rules:
 - If a real base is shown in [test_scaffold], your PoC MUST inherit it
-  (`contract PoC_{ident} is <BaseName>`), override setUp as
-  `function setUp() public override {{ super.setUp(); }}`, and USE its
-  already-deployed state + helpers (the deployed contracts, `_grantRole`, seeding
-  helpers) — do NOT redeploy, re-import, or mock what the base already provides.
+  (`contract PoC_{ident} is <BaseName>`). Follow the base's OWN usage pattern shown
+  in its source: call its deploy helper (e.g. a `_deploy...()` function) as the FIRST
+  line of your test to bring up the protocol, then USE its deployed state variables
+  and helper functions (the deployed contracts, `_grantRole`, deposit/seed helpers).
+  Do NOT redeploy, re-import, or mock what the base provides. Do NOT override the
+  base's setUp unless the base declares it `virtual`.
 - Import each contract using EXACTLY the path in its source-block header
   (`// [target] import this file as: "..."`) — do NOT guess `./Name.sol`.
 - Use ONLY functions, state variables, errors, and events that literally appear
@@ -287,11 +290,24 @@ def _foundry_test_dir(project: Path) -> str:
     return "test"
 
 
-def resolve_scaffold(project: Path, spec: str, disabled: bool) -> list[Path]:
-    """Operator-provided scaffold file(s) (--test-scaffold / POC_SCAFFOLD), else a
-    light auto-discovery: the most-inherited *Base* under the project's test dir.
-    A scaffold is shared deploy INFRASTRUCTURE, never a per-finding answer PoC — the
-    operator is trusted to point at a base, and auto-discovery only picks a *Base*."""
+def _tracked_sol(project: Path) -> set[Path]:
+    """Git-tracked .sol files — the ORIGINAL project. Excludes anything we (or a
+    prior skill run) generated but never committed, so grounding/scaffold only ever
+    uses the contest's own code, never our own PoCs (honesty of the workability test)."""
+    try:
+        out = subprocess.run(["git", "-C", str(project), "ls-files", "*.sol"],
+                             capture_output=True, text=True, timeout=15)
+        return {(project / line).resolve() for line in out.stdout.splitlines() if line.strip()}
+    except Exception:
+        return set()
+
+
+def resolve_scaffold(project: Path, spec: str, disabled: bool,
+                     target_stems: list[str] | None = None) -> list[Path]:
+    """Operator-provided scaffold file(s) (--test-scaffold / POC_SCAFFOLD), else
+    auto-discovery of the project's most-inherited PoC/test BASE. A scaffold is the
+    contest's shared deploy INFRASTRUCTURE, never a per-finding answer PoC — and
+    auto-discovery is restricted to git-TRACKED (original) files only."""
     if disabled:
         return []
     out: list[Path] = []
@@ -305,24 +321,24 @@ def resolve_scaffold(project: Path, spec: str, disabled: bool) -> list[Path]:
             out.append(p.resolve())
     if out:
         return out
-    # auto-discover: most-inherited *Base* contract in the test dir
+    tracked = _tracked_sol(project)
     test_dir = project / _foundry_test_dir(project)
     if not test_dir.is_dir():
         return []
-    counts: dict[str, int] = {}
-    files = list(test_dir.rglob("*.sol"))
-    for f in files:
-        for name in _BASE_INHERIT_RE.findall(f.read_text(encoding="utf-8", errors="replace")):
-            counts[name] = counts.get(name, 0) + 1
-    if not counts:
-        return []
+    # ORIGINAL test files only — never our untracked, skill-generated PoCs/bases.
+    files = [f for f in test_dir.rglob("*.sol") if f.resolve() in tracked] if tracked \
+        else list(test_dir.rglob("*.sol"))
     texts = {f: f.read_text(encoding="utf-8", errors="replace") for f in files}
-    # try candidates most-inherited first; return the first whose DEFINITION file
-    # we can locate under the test dir (some bases live outside it — skip those).
-    for name in sorted(counts, key=counts.get, reverse=True):
-        for f, txt in texts.items():
-            if re.search(rf"\b(?:abstract\s+)?contract\s+{re.escape(name)}\b", txt):
-                return [f.resolve()]
+    inherited: dict[str, int] = {}
+    for txt in texts.values():
+        for name in _BASE_INHERIT_RE.findall(txt):
+            inherited[name] = inherited.get(name, 0) + 1
+    # most-inherited base whose definition is a tracked file (the contest's PoC base)
+    for name in sorted(inherited, key=inherited.get, reverse=True):
+        deff = next((f for f, t in texts.items()
+                     if re.search(rf"\b(?:abstract\s+)?contract\s+{re.escape(name)}\b", t)), None)
+        if deff is not None:
+            return [deff.resolve()]
     return []
 
 
@@ -504,12 +520,11 @@ def main() -> None:
     sandbox = DockerSandbox()
     run_start = time.monotonic()
 
-    # Test scaffold (path A): the project's PoC/test base for the model to inherit,
-    # so it uses the real deploy setup instead of mocking/redeploying it.
-    scaffold_paths = resolve_scaffold(args.project, args.test_scaffold, args.no_scaffold)
-    scaffold = read_scaffold(args.project, scaffold_paths)
-    log({"event": "scaffold", "files": [str(p.relative_to(args.project)) for p in scaffold_paths]
-         if scaffold_paths else [], "bar": "pass" if args.require_pass else "compile+real"})
+    # Test scaffold (path A) is chosen PER FINDING inside the loop (a cooldown
+    # finding wants the cooldown base, etc.). Log the mode here.
+    log({"event": "scaffold_mode",
+         "source": "operator" if args.test_scaffold else ("off" if args.no_scaffold else "auto"),
+         "bar": "pass" if args.require_pass else "compile+real"})
 
     # ── Step 2: per task, draft → run → fix → rerun (up to N attempts) ───────
     for task in todo:
@@ -523,6 +538,14 @@ def main() -> None:
         started = time.time()
         log({"event": "task_start", "finding_id": fid, "title": task["title"]})
 
+        # Per-finding scaffold: the project's PoC base for THIS finding's target
+        # (a cooldown finding → the cooldown base, virtual setUp so it overrides).
+        target_stems = [Path(n).stem for n in dict.fromkeys(_SOL_FILE_RE.findall(task["location"]))]
+        scaffold_paths = resolve_scaffold(args.project, args.test_scaffold, args.no_scaffold, target_stems)
+        scaffold = read_scaffold(args.project, scaffold_paths)
+        log({"event": "scaffold", "finding_id": fid,
+             "files": [str(p.relative_to(args.project)) for p in scaffold_paths]})
+
         try:
             code = draft(client, task, args.project, scaffold)
         except ModelUnavailableError as e:
@@ -531,7 +554,6 @@ def main() -> None:
 
         outcome = "unknown"
         res = None
-        target_stems = [Path(n).stem for n in dict.fromkeys(_SOL_FILE_RE.findall(task["location"]))]
         for attempt in range(1, args.attempts + 1):
             res = write_poc(fid, poc_dir, generator=lambda _f, c=code: c)
             rel = str(res.path.relative_to(args.project))
