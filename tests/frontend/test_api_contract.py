@@ -39,19 +39,26 @@ class FakeProvider:
         )
 
 
+_TARGET = ""  # an external target dir (set per-test) — never the agent repo
+
+
 @pytest.fixture
 def client(tmp_path):
     # Keep the test off the real ./memory: swap in a tmp-backed manager, and
     # inject the fake provider so a turn runs without a model.
+    global _TARGET
     appmod._manager = SessionManager(EpisodicMemory(memory_root=tmp_path / "mem", secret_key=_KEY))
     sessions.provider_factory = FakeProvider
+    target = tmp_path / "target"          # an external target folder outside the agent repo
+    target.mkdir()
+    _TARGET = str(target)
     with TestClient(app) as c:  # `with` runs lifespan → events.bind_loop
         yield c
     sessions.provider_factory = None
 
 
 def _start(client) -> str:
-    r = client.post("/api/session", json={"project_or_path": ".", "project_id": "testproj"})
+    r = client.post("/api/session", json={"project_path": _TARGET, "project_id": "testproj"})
     assert r.status_code == 200
     return r.json()["session_id"]
 
@@ -90,6 +97,15 @@ def test_domain_panels_are_pack_tagged(client):
     assert body["pack"]  # the active pack contributes the panels
     assert isinstance(body["panels"], list) and body["panels"]
     assert body["panels"][0]["title"] and "body" in body["panels"][0]
+
+
+def test_session_requires_explicit_external_path(client):
+    # No path → 400 (no silent fallback to the agent repo).
+    assert client.post("/api/session", json={"project_id": "x"}).status_code == 400
+    # A non-existent path → 400.
+    assert client.post("/api/session", json={"project_path": "/no/such/dir"}).status_code == 400
+    # The agent repo itself (".") → 400 (target must be external).
+    assert client.post("/api/session", json={"project_path": "."}).status_code == 400
 
 
 def test_unknown_session_404(client):

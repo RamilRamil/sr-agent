@@ -107,9 +107,9 @@ export const api = {
   }) => post("/api/model/config", b).then(j<ModelConfig>),
   warm: () => post("/api/model/warm", {}).then(j<WarmResult>),
 
-  startSession: (project_or_path: string, project_id?: string) =>
-    post("/api/session", { project_or_path, project_id }).then(
-      j<{ session_id: string; project_id: string }>,
+  startSession: (project_path: string, project_id?: string) =>
+    post("/api/session", { project_path, project_id }).then(
+      j<{ session_id: string; project_id: string; scope_root: string }>,
     ),
   getSession: (id: string) => fetch(`/api/session/${id}`).then(j<SessionView>),
   sendMessage: (id: string, text: string) =>

@@ -9,7 +9,7 @@
     turn: TurnResult;
   }>();
 
-  let target = ".";
+  let target = "";  // explicit external target folder — no default (never the agent repo)
   let projectId = "";
   let text = "";
   let scopeRoot = "";
@@ -24,11 +24,10 @@
     error = "";
     busy = true;
     try {
-      const s = await api.startSession(target, projectId || undefined);
+      const s = await api.startSession(target.trim(), projectId.trim() || undefined);
       dispatch("started", { sessionId: s.session_id, projectId: s.project_id });
-      const view = await api.getSession(s.session_id);
-      scopeRoot = view.scope_root;
-      status = view.status;
+      scopeRoot = s.scope_root;   // the resolved external target the session is bound to
+      status = "active";
       transcript = [];
     } catch (e) {
       error = (e as Error).message;
@@ -73,14 +72,14 @@
   {#if !sessionId}
     <div class="stack">
       <label class="stack">
-        <span class="muted">Target folder (a path binds the working scope)</span>
-        <input bind:value={target} placeholder="/path/to/audit or ." />
+        <span class="muted">External target folder (absolute path — binds the working scope; never the agent repo)</span>
+        <input bind:value={target} placeholder="/path/to/target/contracts" />
       </label>
       <label class="stack">
         <span class="muted">Project id (optional — memory namespace)</span>
         <input bind:value={projectId} placeholder="defaults to the folder name" />
       </label>
-      <button class="primary" on:click={start} disabled={busy}>Start session</button>
+      <button class="primary" on:click={start} disabled={busy || !target.trim()}>Start session</button>
     </div>
   {:else}
     <div class="row" style="justify-content: space-between;">

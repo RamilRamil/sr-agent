@@ -70,8 +70,15 @@ async def post_warm() -> dict:
 # ── Session (US1) ─────────────────────────────────────────────────────────────
 @app.post("/api/session")
 def post_session(body: dict) -> dict:
-    s = _manager.start(body["project_or_path"], body.get("project_id"))
-    return {"session_id": s.chat.session_id, "project_id": s.chat.principal.project_id}
+    try:
+        s = _manager.start(body.get("project_path", ""), body.get("project_id"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))  # explicit external path required
+    return {
+        "session_id": s.chat.session_id,
+        "project_id": s.chat.principal.project_id,
+        "scope_root": str(s.loop._audit_root),
+    }
 
 
 @app.get("/api/session/{session_id}")

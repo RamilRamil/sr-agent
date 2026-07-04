@@ -28,6 +28,10 @@ from frontend.backend.model_config import CONFIG
 # Test seam: override to inject a fake reasoning provider (drive a turn w/o Ollama).
 provider_factory: Callable[[], object] | None = None
 
+# The agent's own repo root (…/frontend/backend/sessions.py → repo root). A session
+# is never allowed to be scoped here — the audited target stays strictly external.
+_AGENT_ROOT = Path(__file__).resolve().parents[2]
+
 
 class Session:
     def __init__(self, chat: ChatSession, loop: OrchestratorLoop) -> None:
@@ -40,12 +44,20 @@ class SessionManager:
         self._memory = memory
         self._sessions: dict[str, Session] = {}
 
-    def start(self, project_or_path: str, project_id: str | None = None) -> Session:
-        p = Path(project_or_path)
-        if p.exists() and p.is_dir():
-            audit_root, pid = p, (project_id or p.name)
-        else:
-            audit_root, pid = Path("."), (project_id or project_or_path)
+    def start(self, project_path: str, project_id: str | None = None) -> Session:
+        # The target is ALWAYS an explicit, existing, EXTERNAL folder. No silent
+        # fallback to "." — that would scope the session at the agent's own repo,
+        # letting it read/write its own tree and mixing target code into the agent
+        # (see memory feedback_no_target_code_in_agent).
+        if not project_path or not str(project_path).strip():
+            raise ValueError("project path is required (the external target folder)")
+        p = Path(project_path).expanduser()
+        if not p.is_dir():
+            raise ValueError(f"project path is not an existing directory: {project_path}")
+        audit_root = p.resolve()
+        if audit_root == _AGENT_ROOT or _AGENT_ROOT in audit_root.parents:
+            raise ValueError("project path must be an EXTERNAL target, not the agent repo itself")
+        pid = project_id or audit_root.name
         principal = Principal(user_id="ui", platform="cli", project_id=pid)
         chat = ChatSession(principal=principal)
         save_session(chat, self._memory)
