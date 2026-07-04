@@ -81,6 +81,17 @@ def test_session_view_shape(client):
     assert "scope_root" in view and "status" in view
 
 
+def test_domain_panels_are_pack_tagged(client):
+    sid = _start(client)
+    r = client.get(f"/api/domain/panels?session={sid}&project=testproj")
+    assert r.status_code == 200
+    body = r.json()
+    # SC-008: domain content is pack-tagged; the generic surface is pack-agnostic.
+    assert body["pack"]  # the active pack contributes the panels
+    assert isinstance(body["panels"], list) and body["panels"]
+    assert body["panels"][0]["title"] and "body" in body["panels"][0]
+
+
 def test_unknown_session_404(client):
     assert client.get("/api/session/does-not-exist").status_code == 404
     assert client.post("/api/session/nope/message", json={"text": "x"}).status_code == 404

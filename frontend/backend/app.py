@@ -115,6 +115,12 @@ def get_memory(project: str) -> list[dict]:
     return state.memory_records(_memory, project)
 
 
+@app.get("/api/domain/panels")
+def get_domain_panels(session: str, project: str) -> dict:
+    """Pack-contributed domain panels (SC-008) — generic surface, pack content."""
+    return state.domain_panels(_memory, session, project)
+
+
 # ── Confirmation queue + the deliberate gate (US2 / FR-009) ───────────────────
 @app.get("/api/confirmations")
 def list_confirmations() -> list[dict]:

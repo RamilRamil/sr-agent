@@ -81,6 +81,11 @@ export interface ConfirmationNotice extends ConfirmationItem {
   confirm_token: string;
 }
 
+export interface DomainPanels {
+  pack: string;
+  panels: { title: string; kind: string; body: string }[];
+}
+
 export interface MemoryRecordView {
   kind: string;
   source_type: string;
@@ -114,6 +119,10 @@ export const api = {
     fetch(`/api/memory?project=${encodeURIComponent(project)}`).then(
       j<MemoryRecordView[]>,
     ),
+  domainPanels: (session: string, project: string) =>
+    fetch(
+      `/api/domain/panels?session=${encodeURIComponent(session)}&project=${encodeURIComponent(project)}`,
+    ).then(j<DomainPanels>),
 
   confirmations: () => fetch("/api/confirmations").then(j<ConfirmationItem[]>),
   // Fetching an item's notice ISSUES the one-shot confirm_token (FR-009).

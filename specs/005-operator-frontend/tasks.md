@@ -106,9 +106,9 @@
 
 ## Phase 8: User Story 5 — Makeup & health (Priority: P3)
 
-- [ ] T027 [P] [US5] `GET /api/health` (`ready` vs `available`, sandbox, ollama) + `GET /api/modules` (active pack + tools + kernel invariants) + `GET /api/domain/panels?session={id}` (pack-produced domain data, FR-017)
+- [X] T027 [P] [US5] `GET /api/health` (`ready` vs `available`, sandbox, ollama) + `GET /api/modules` (active pack + tools + kernel invariants) + `GET /api/domain/panels?session={id}` (pack-produced domain data, FR-017)
 - [X] T028 [P] [US5] `frontend/ui/src/panels/Health.svelte` + `Modules.svelte` + `Help.svelte` (architecture/kernel-pack + invariants reference)
-- [ ] T029 [P] [US5] Render pack-contributed domain panels (findings roadmap / PoC status) from `/api/domain/panels`, tagged by active pack — generic panels unchanged when the pack changes (SC-008)
+- [X] T029 [P] [US5] Render pack-contributed domain panels (findings roadmap / PoC status) from `/api/domain/panels`, tagged by active pack — generic panels unchanged when the pack changes (SC-008)
 
 **Checkpoint**: operator can tell readiness + active modules; domain panels are pack-driven.
 

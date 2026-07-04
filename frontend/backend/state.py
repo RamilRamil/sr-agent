@@ -50,6 +50,28 @@ def modules() -> dict:
     }
 
 
+def domain_panels(memory: EpisodicMemory, session_id: str, project_id: str) -> dict:
+    """Pack-produced domain panels (US5/FR-017, SC-008).
+
+    The generic panels above are pack-AGNOSTIC. Domain content comes from the
+    active pack: today the audit pack contributes the findings/PoC roadmap — a
+    regenerable, read-only VIEW over append-only memory (never a parallel store).
+    A second pack would supply its own renderer; this generic surface, tagged by
+    pack name, is unchanged. The frontend is an audit-aware composition root
+    (imports AUDIT_PACK like cli.py), so it wires the audit renderer here."""
+    from sr_agent.orchestrator.chat_session import render_roadmap
+    return {
+        "pack": AUDIT_PACK.name,
+        "panels": [
+            {
+                "title": "Findings / PoC roadmap",
+                "kind": "markdown",
+                "body": render_roadmap(session_id, project_id, memory),
+            },
+        ],
+    }
+
+
 def memory_records(memory: EpisodicMemory, project_id: str) -> list[dict]:
     """Read-only HMAC memory browser (US3). Records failing verification are
     already dropped by the kernel; we only render what verifies."""

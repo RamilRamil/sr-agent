@@ -5,6 +5,7 @@
   import Settings from "./panels/Settings.svelte";
   import SystemPanel from "./panels/SystemPanel.svelte";
   import Memory from "./panels/Memory.svelte";
+  import DomainPanels from "./panels/DomainPanels.svelte";
 
   let sessionId: string | null = null;
   let projectId: string | null = null;
@@ -31,6 +32,7 @@
   <section>
     <ChatSession {sessionId} on:started={onStarted} on:turn={onTurn} />
     <LiveTrace {sessionId} />
+    <DomainPanels {sessionId} {projectId} />
     <Memory {projectId} />
   </section>
   <aside>
