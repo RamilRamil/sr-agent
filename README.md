@@ -11,6 +11,18 @@ Most agent frameworks focus on capability. SR-agent focuses on both:
 
 The second goal is the research contribution. SR-agent is a reference implementation of an agent that takes its own security as seriously as the security of the contracts it audits.
 
+## Two entities — read these first
+
+The project is deliberately split into two separable things (see spec 004):
+
+- **[The kernel](docs/kernel.md)** — the task-agnostic, memory-injection-resistant secure
+  agent core. The reusable part; the research contribution. Knows nothing about auditing.
+- **[The audit agent](docs/audit-agent.md)** — the first *capability pack*, which plugs
+  the kernel into smart-contract auditing. Task-specific; lives under `sr_agent/packs/audit/`.
+
+The kernel enforces the guarantees; the pack contributes the capability and can never
+weaken one. Everything below describes the audit pack riding on the kernel.
+
 ## The threat: Memory Injection
 
 Memory Injection (MI) is an attack where malicious content planted in an agent's memory causes it to take harmful actions in future sessions — exfiltrating data, skipping analysis, or issuing false safe verdicts. Attack success rates (ASR) against unprotected agents reach **55–85%** depending on the attack type (from paper [2503.16248](https://arxiv.org/abs/2503.16248)).
