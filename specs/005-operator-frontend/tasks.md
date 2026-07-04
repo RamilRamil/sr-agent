@@ -18,8 +18,8 @@
 ## Phase 1: Setup
 
 - [X] T001 [P] Scaffold `frontend/backend/` — FastAPI app skeleton + deps (`fastapi`, `uvicorn[standard]`) in `frontend/backend/requirements.txt`
-- [ ] T002 [P] Scaffold `frontend/ui/` — Svelte + Vite project (`package.json`, `vite.config.ts` proxying `/api`+`/ws` to the backend, `index.html`, `src/App.svelte`)
-- [ ] T003 [P] Add `frontend/Dockerfile` (multi-stage: node builds `ui/` → python serves API + static) and `frontend/docker-compose.yml` (mounts `/var/run/docker.sock`, joins the `ollama` network — research R6)
+- [X] T002 [P] Scaffold `frontend/ui/` — Svelte + Vite project (`package.json`, `vite.config.ts` proxying `/api`+`/ws` to the backend, `index.html`, `src/App.svelte`)
+- [X] T003 [P] Add `frontend/Dockerfile` (multi-stage: node builds `ui/` → python serves API + static) and `frontend/docker-compose.yml` (mounts `/var/run/docker.sock`, joins the `ollama` network — research R6)
 
 **Checkpoint**: backend serves a hello route; SPA dev server loads; container builds.
 
@@ -33,7 +33,7 @@
 - [X] T005 [P] `frontend/backend/app.py` — FastAPI composition root: import `sr_agent` + `AUDIT_PACK`, build `EpisodicMemory`/`ChatReasoningProvider`/`OrchestratorLoop(pack=AUDIT_PACK, event_sink=…)` like `cli.py`; mount routes + static SPA
 - [X] T006 [P] `frontend/backend/events.py` — in-process event bus: per-session async queues; the loop's `event_sink` publishes, WS clients subscribe
 - [X] T007 [P] `frontend/backend/state.py` — read-only projections per data-model.md (`SessionView`, `ProvenanceBlock`, `MemoryRecordView`, `HealthStatus`, `ModuleDescriptor`, `AuditTrailEntry`); NEVER calls `memory.write`
-- [ ] T008 [P] SPA shared lib in `frontend/ui/src/lib/`: `api.ts` (REST), `ws.ts` (WebSocket), `trust.ts` (SourceType→style + inert-render helpers; no `{@html}` on untrusted — research R7)
+- [X] T008 [P] SPA shared lib in `frontend/ui/src/lib/`: `api.ts` (REST), `ws.ts` (WebSocket), `trust.ts` (SourceType→style + inert-render helpers; no `{@html}` on untrusted — research R7)
 
 **Checkpoint**: backend runs through the kernel via the pack; event bus streams a stub event; SPA can call a read endpoint.
 
@@ -48,8 +48,8 @@
 - [X] T009 [US1] `frontend/backend/sessions.py` — `POST /api/session` (start bound session) + `POST /api/session/{id}/message` (`loop.run_turn` with the `event_sink`→bus); returns the `TurnResult` projection
 - [X] T010 [US1] `WS /ws/session/{id}` in `frontend/backend/app.py` — stream `TraceEvent`s per contracts/live-trace-ws.md
 - [X] T011 [P] [US1] `GET /api/session/{id}` → `SessionView` (scope root, files read, status) in `frontend/backend/app.py`
-- [ ] T012 [P] [US1] `frontend/ui/src/panels/ChatSession.svelte` — start/send/reply, bound project + working scope
-- [ ] T013 [P] [US1] `frontend/ui/src/panels/LiveTrace.svelte` — subscribe WS, render step events + tier/budget + token liveness (FR-004–006)
+- [X] T012 [P] [US1] `frontend/ui/src/panels/ChatSession.svelte` — start/send/reply, bound project + working scope
+- [X] T013 [P] [US1] `frontend/ui/src/panels/LiveTrace.svelte` — subscribe WS, render step events + tier/budget + token liveness (FR-004–006)
 - [ ] T014 [US1] `tests/frontend/test_api_contract.py` — session start/message and the WS emit the documented shapes
 
 **Checkpoint**: an operator drives a full turn from the browser and watches it live. **MVP.**
@@ -64,7 +64,7 @@
 
 - [X] T015 [US2] `GET /api/confirmations?session={id}` → `ConfirmationItem[]` with the `ConsequentialActionNotice` (what would run). Fetching an item's notice ISSUES the short-lived `confirm_token` bound to that id (the deliberate-act prerequisite for T016, C3)
 - [X] T016 [US2] `frontend/backend/confirm.py` — the deliberate two-step: a `confirm_token` issued only on fetching an item's notice; `POST /api/confirm/{id}` (with token + decision) writes the SAME OOB confirmation record as `sr-agent confirm` (reuses `confirmation.py`); NO auto-approve, NO reflexive one-click (contracts/approval-gate.md)
-- [ ] T017 [P] [US2] `frontend/ui/src/panels/ConfirmQueue.svelte` — review-notice → deliberate confirm (distinct from browsing); also displays the `sr-agent confirm <id> --approve` fallback command
+- [X] T017 [P] [US2] `frontend/ui/src/panels/ConfirmQueue.svelte` — review-notice → deliberate confirm (distinct from browsing); also displays the `sr-agent confirm <id> --approve` fallback command
 - [X] T018 [US2] `tests/frontend/test_approval_gate.py` (SECURITY) — G1: write_execute pauses & doesn't execute; G2: no/invalid token → no approval; G3: only a post-notice token approves, via the kernel's `execute_confirmed`; G4: no code path auto-approves
 
 **Checkpoint**: 🔒 approval is hosted in the UI without weakening the gate — proven by test.
@@ -78,7 +78,7 @@
 **Independent Test**: Set the endpoint, press warm, see ready; no paid key needed for anything.
 
 - [X] T019 [US6] `frontend/backend/model_config.py` — per-process `ModelConfig` (endpoint/model/optional key) + `GET`/`POST /api/model/config` (key write-only: never returned/persisted/logged) + `POST /api/model/warm` → `WarmResult` (`LocalClient.warm()`+`ready()`); the paid backend is an EXPLICIT selection, never a silent fallback (FR-021/R8). A config change **rebuilds the active session's reasoning provider** so its next turn uses the new backend (FR-019, C2). `warm`/readiness reads the **same `HealthStatus` projection** as the health panel (single source — no second impl, A2)
-- [ ] T020 [P] [US6] `frontend/ui/src/panels/Settings.svelte` — set local endpoint/model (tunnel-friendly), optional paid key, explicit backend selector, warm button + live state (warming→ready/failed)
+- [X] T020 [P] [US6] `frontend/ui/src/panels/Settings.svelte` — set local endpoint/model (tunnel-friendly), optional paid key, explicit backend selector, warm button + live state (warming→ready/failed)
 - [X] T021 [US6] `tests/frontend/test_no_paid_api.py` — every surface functions with no key (FR-016/021); `GET /api/model/config` never returns the secret
 
 **Checkpoint**: operator points the agent at a tunnel and warms it from the UI, no restart.
@@ -107,7 +107,7 @@
 ## Phase 8: User Story 5 — Makeup & health (Priority: P3)
 
 - [ ] T027 [P] [US5] `GET /api/health` (`ready` vs `available`, sandbox, ollama) + `GET /api/modules` (active pack + tools + kernel invariants) + `GET /api/domain/panels?session={id}` (pack-produced domain data, FR-017)
-- [ ] T028 [P] [US5] `frontend/ui/src/panels/Health.svelte` + `Modules.svelte` + `Help.svelte` (architecture/kernel-pack + invariants reference)
+- [X] T028 [P] [US5] `frontend/ui/src/panels/Health.svelte` + `Modules.svelte` + `Help.svelte` (architecture/kernel-pack + invariants reference)
 - [ ] T029 [P] [US5] Render pack-contributed domain panels (findings roadmap / PoC status) from `/api/domain/panels`, tagged by active pack — generic panels unchanged when the pack changes (SC-008)
 
 **Checkpoint**: operator can tell readiness + active modules; domain panels are pack-driven.
@@ -116,9 +116,9 @@
 
 ## Phase 9: Polish & Cross-Cutting
 
-- [ ] T030 [P] Compose `frontend/ui/src/App.svelte` — the panel layout tying all panels together
+- [X] T030 [P] Compose `frontend/ui/src/App.svelte` — the panel layout tying all panels together
 - [ ] T031 [P] Finalize `frontend/Dockerfile` + `docker-compose.yml`; run `quickstart.md` end-to-end (build, open localhost, drive a turn, warm a model)
-- [ ] T032 Constitution pass: no surface requires a paid key (FR-016); `event_sink` is observability-only (existing kernel suite still green); no `{@html}` on untrusted content anywhere; capture any gotchas for the Phase-5 lessons queue
+- [X] T032 Constitution pass: no surface requires a paid key (FR-016); `event_sink` is observability-only (existing kernel suite still green); no `{@html}` on untrusted content anywhere; capture any gotchas for the Phase-5 lessons queue
 
 ---
 
