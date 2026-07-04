@@ -50,7 +50,7 @@
 - [X] T011 [P] [US1] `GET /api/session/{id}` → `SessionView` (scope root, files read, status) in `frontend/backend/app.py`
 - [X] T012 [P] [US1] `frontend/ui/src/panels/ChatSession.svelte` — start/send/reply, bound project + working scope
 - [X] T013 [P] [US1] `frontend/ui/src/panels/LiveTrace.svelte` — subscribe WS, render step events + tier/budget + token liveness (FR-004–006)
-- [ ] T014 [US1] `tests/frontend/test_api_contract.py` — session start/message and the WS emit the documented shapes
+- [X] T014 [US1] `tests/frontend/test_api_contract.py` — session start/message and the WS emit the documented shapes
 
 **Checkpoint**: an operator drives a full turn from the browser and watches it live. **MVP.**
 
