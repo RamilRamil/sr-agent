@@ -676,6 +676,52 @@ def _compiled(stdout: str, stderr: str) -> bool:
     return "Compiler run failed" not in blob and "Compilation failed" not in blob
 
 
+def _sigs_for(callable_api: str, contract: str) -> str:
+    """The real callable signatures block for a contract, from [callable_api]."""
+    for block in callable_api.split("\n\n"):
+        if block.startswith(f"// {contract} "):
+            return "\n".join(block.splitlines()[1:])[:1400]
+    return ""
+
+
+def _path_for(file_map: str, name: str) -> str:
+    """The real import path for a contract/interface name, from [project_files]."""
+    for line in file_map.splitlines():
+        if line.startswith(f"{name}: "):
+            return line.split(": ", 1)[1]
+    return ""
+
+
+def _targeted_hints(forge_output: str, callable_api: str, file_map: str) -> str:
+    """Turn each compiler error into an AUTHORITATIVE, specific fix by resolving it
+    against ground truth (real signatures + real paths). The compiler says exactly
+    what's wrong; we know exactly what's right — connect the two so the repair is a
+    precise instruction, not a hope."""
+    hints: list[str] = []
+    # 9582 — member not found on a contract → list that contract's real functions
+    for member, contract in re.findall(
+            r'Member "(\w+)" not found[^.]*?in contract (\w+)', forge_output):
+        sigs = _sigs_for(callable_api, contract)
+        if sigs:
+            hints.append(f"`{contract}` has NO member `{member}`. Use only its real functions:\n{sigs}")
+        else:
+            hints.append(f"`{contract}` has no member `{member}` — use a real function from [callable_api].")
+    # 6275 — source file not found → the real import path
+    for src in re.findall(r'Source "([^"]+\.sol)" not found', forge_output):
+        name = Path(src).stem
+        path = _path_for(file_map, name)
+        hints.append(f"Import `{name}` from the real path `{path}`" if path
+                     else f"`{name}` is not a real file — use a name from [project_files], not an invented one.")
+    # wrong argument count → point back to the real signatures
+    if "Wrong argument count" in forge_output:
+        hints.append("A call has the wrong number of arguments — match a signature in [callable_api] exactly.")
+    # 7920 — undeclared identifier (name not in scope / needs import)
+    if "Identifier not found" in forge_output:
+        hints.append("An identifier is undefined: use only names from [project_files] + the base's state "
+                     "variables, and IMPORT every type you reference (imports are not inherited from the base).")
+    return "\n".join(dict.fromkeys(hints))
+
+
 def _grounding(project: Path, location: str, scaffold: str, callable_api: str) -> tuple[str, str]:
     """Source grounding + scaffold. With a scaffold the base carries the setup, and
     with a callable_api the signatures are already extracted, so the raw source is
@@ -903,14 +949,20 @@ def main() -> None:
                 outcome = ("vacuous_pass" if test.passed else
                            "compile_only_defective" if compiled else "exhausted")
                 break
-            # Feed the forge output AND the structural defects back so the model repairs
-            # both the compile and the "prove nothing" evasions.
+            # Feed back: raw forge output + structural defects + TARGETED authoritative
+            # fixes (each compiler error resolved against the real signatures/paths).
             defect_note = (
                 "\n\nSTRUCTURAL PROBLEMS — the test builds but proves nothing; fix ALL:\n- "
                 + "\n- ".join(defects) if defects else ""
             )
+            hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map)
+            hint_note = f"\n\nTARGETED FIXES (authoritative — apply exactly):\n{hints}" if hints else ""
+            if hints:
+                log({"event": "targeted_hints", "finding_id": fid, "attempt": attempt,
+                     "hints": hints[:300]})
             try:
-                code = fix(client, task, code, test.stdout + "\n" + test.stderr + defect_note,
+                code = fix(client, task, code,
+                           test.stdout + "\n" + test.stderr + defect_note + hint_note,
                            args.project, scaffold, example, file_map, callable_api)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
