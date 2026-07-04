@@ -1,0 +1,78 @@
+"""Session management (feature 005, US1).
+
+Builds an OrchestratorLoop per chat session — the SAME wiring as cli.py's chat
+command (pack=AUDIT_PACK, ChatReasoningProvider over a LocalClient) — plus the
+event_sink so the live trace streams to the WS. A provider factory can be
+overridden (tests inject a fake provider so a turn can be driven without Ollama).
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable
+
+from sr_agent.config import config
+from sr_agent.llm_core.chat_reasoning import ChatReasoningProvider
+from sr_agent.memory.episodic import EpisodicMemory
+from sr_agent.models.chat import ChatSession
+from sr_agent.models.principal import Principal
+from sr_agent.orchestrator.chat_session import save_session
+from sr_agent.orchestrator.loop import OrchestratorLoop
+from sr_agent.packs.audit.escalation import domain_escalation
+from sr_agent.packs.audit.pack import AUDIT_PACK
+from sr_agent.packs.audit.reasoning import AUDIT_CHAT_SYSTEM, signal_from
+from sr_agent.packs.audit.session import AuditInput, AuditSession
+
+from frontend.backend import events
+from frontend.backend.model_config import CONFIG
+
+# Test seam: override to inject a fake reasoning provider (drive a turn w/o Ollama).
+provider_factory: Callable[[], object] | None = None
+
+
+class Session:
+    def __init__(self, chat: ChatSession, loop: OrchestratorLoop) -> None:
+        self.chat = chat
+        self.loop = loop
+
+
+class SessionManager:
+    def __init__(self, memory: EpisodicMemory) -> None:
+        self._memory = memory
+        self._sessions: dict[str, Session] = {}
+
+    def start(self, project_or_path: str, project_id: str | None = None) -> Session:
+        p = Path(project_or_path)
+        if p.exists() and p.is_dir():
+            audit_root, pid = p, (project_id or p.name)
+        else:
+            audit_root, pid = Path("."), (project_id or project_or_path)
+        principal = Principal(user_id="ui", platform="cli", project_id=pid)
+        chat = ChatSession(principal=principal)
+        save_session(chat, self._memory)
+
+        loop = self._build_loop(chat, principal, audit_root)
+        s = Session(chat, loop)
+        self._sessions[chat.session_id] = s
+        return s
+
+    def get(self, session_id: str) -> Session | None:
+        return self._sessions.get(session_id)
+
+    def _build_loop(self, chat: ChatSession, principal: Principal, audit_root: Path) -> OrchestratorLoop:
+        audit_session = AuditSession(
+            principal=principal, audit_input=AuditInput(path=audit_root, principal=principal),
+        )
+        if provider_factory is not None:
+            provider = provider_factory()
+        else:
+            provider = ChatReasoningProvider(
+                local=CONFIG.local_client(), session=audit_session, relay_dir=config.relay_root,
+                system_prompt=AUDIT_CHAT_SYSTEM, signal_from=signal_from,
+                domain_escalation=domain_escalation,
+            )
+        return OrchestratorLoop(
+            audit_session, self._memory, audit_root,
+            pack=AUDIT_PACK, reasoning_provider=provider,
+            confirmations_dir=config.confirmations_root,
+            event_sink=events.make_sink(chat.session_id),
+        )

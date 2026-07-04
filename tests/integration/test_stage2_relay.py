@@ -8,10 +8,10 @@ import pytest
 from pathlib import Path
 
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import AuditInput, AuditSession, Principal
+from sr_agent.packs.audit.session import AuditInput, AuditSession, Principal
 from sr_agent.models.memory import SourceType
 from sr_agent.orchestrator.relay import save_response
-from sr_agent.planner.stage2 import run_stage2
+from sr_agent.packs.audit.planner.stage2 import run_stage2
 
 SECRET = b"test-secret-key-32-bytes-exactly!"
 

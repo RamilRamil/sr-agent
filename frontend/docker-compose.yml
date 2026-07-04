@@ -1,0 +1,33 @@
+# Operator frontend — single service. Run from the repo root:
+#   docker compose -f frontend/docker-compose.yml up --build
+# then open http://localhost:8000.
+#
+# The reasoning endpoint is chosen at runtime from the UI (US6): point it at a
+# host Ollama (http://host.docker.internal:11434) or a cloud-GPU tunnel URL. So
+# this service does NOT need to join the ollama compose network.
+services:
+  frontend:
+    build:
+      context: ..                       # repo root — needs sr_agent/ + frontend/
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      # Required by sr_agent.config. Override with a real 32-byte hex key.
+      SR_SECRET_KEY: ${SR_SECRET_KEY:-0000000000000000000000000000000000000000000000000000000000000000}
+      SR_MEMORY_ROOT: /data/memory
+      SR_CONFIRMATIONS_ROOT: /data/confirmations
+      SR_RELAY_ROOT: /data/relay
+    volumes:
+      # DockerSandbox spawns network-isolated PoC containers on the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Persist memory / confirmations / relay across restarts.
+      - sr_frontend_data:/data
+      # Mount audit targets here (read) so a session can bind a folder under it.
+      - ./targets:/app/targets:ro
+    extra_hosts:
+      # Lets the default endpoint reach a host-run Ollama.
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  sr_frontend_data:

@@ -8,10 +8,10 @@ from pathlib import Path
 
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 from sr_agent.memory.episodic import EpisodicMemory
-from sr_agent.models.audit import AuditInput, AuditSession, Principal
-from sr_agent.models.finding import Severity
+from sr_agent.packs.audit.session import AuditInput, AuditSession, Principal
+from sr_agent.packs.audit.finding import Severity
 from sr_agent.models.memory import SourceType
-from sr_agent.planner.stage2 import run_stage2_local
+from sr_agent.packs.audit.planner.stage2 import run_stage2_local
 
 SECRET = b"test-secret-key-32-bytes-exactly!"
 

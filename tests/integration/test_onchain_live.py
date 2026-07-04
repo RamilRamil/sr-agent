@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_alchemy_fetcher_builds_and_fetches():
-    from sr_agent.tools.onchain import analyze_transactions, make_alchemy_fetcher
+    from sr_agent.packs.audit.tools.onchain import analyze_transactions, make_alchemy_fetcher
     fetcher = make_alchemy_fetcher(os.environ["ALCHEMY_API_KEY"])
     # WETH on mainnet; a tiny 1-block window keeps the archive read cheap.
     weth = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
