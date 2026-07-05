@@ -566,64 +566,80 @@ def build_callable_api(project: Path, location: str, symbol_index: SymbolIndex |
     parsed AST (`SymbolIndex.functions_in_file`), not a hand-rolled function-header
     regex — this closes the dedup-collision bug class structurally (each function is
     its own Symbol; nothing depends on two rendered-text lines happening to differ).
-    Falls back to the regex scan when the index is unavailable (`--no-symbol-index`)."""
+    Falls back to the regex scan when the index is unavailable (`--no-symbol-index`).
+
+    Each name mentioned in `location` gets its OWN budget share, not one shared pool
+    consumed first-come-first-served (fixed 2026-07-05: on the real H-01 location
+    `StrataCDO.coverage / ... + SharesCooldown.cancel`, `StrataCDO`'s own block plus
+    its dependency chain exhausted the whole 6000-char budget before `SharesCooldown`
+    — the actual finding target — ever got a turn, so its `onlyUser(user)` CALLER
+    REQUIREMENT never reached the model at all; reproduced byte-for-byte by both the
+    regex and AST paths, i.e. a pre-existing bug, not one T020 introduced).
+
+    Within a file's own share, a function whose name is explicitly mentioned in
+    `location` (via `_location_methods`, e.g. `cancel` in "SharesCooldown.cancel")
+    is rendered FIRST, ahead of every other function in that file — otherwise the
+    actual finding-target function can still be truncated out by budget if it
+    happens to be declared later in the source file than unrelated functions
+    (observed 2026-07-05: `cancel` itself was truncated out of SharesCooldown's
+    block even after the per-name budget fix, because 7 other external functions
+    are declared before it in the same file)."""
     names = _location_names(location)
     if not names:
         return ""
+    wanted_methods = set(_location_methods(location))
     seen: set[Path] = set()
     blocks: list[str] = []
-    budget = CALLABLE_API_BUDGET
+    per_name_budget = max(1, CALLABLE_API_BUDGET // len(names))
 
-    def emit_ast(path: Path) -> None:
-        nonlocal budget
-        if path in seen or budget <= 0:
-            return
-        seen.add(path)
-        lines: list[str] = []
+    def render_ast(path: Path, budget: int) -> tuple[str, int]:
+        prioritized: list[str] = []
+        rest: list[str] = []
         for m in symbol_index.functions_in_file(path):
             if m.visibility not in ("external", "public"):
                 continue
-            lines.append(m.definition)
+            entry = [m.definition]
             if m.modifiers:
-                lines.append(f"    ⚠ CALLER REQUIREMENT on `{m.name}(...)` above: "
+                entry.append(f"    ⚠ CALLER REQUIREMENT on `{m.name}(...)` above: "
                              f"{', '.join(m.modifiers)} — vm.prank/startPrank the required "
                              f"address BEFORE calling it, or it reverts.")
-        if lines:
-            body = "\n".join(lines)[:budget]
-            budget -= len(body)
-            blocks.append(f"// {path.stem} — real callable signatures:\n{body}")
+            (prioritized if m.name in wanted_methods else rest).extend(entry)
+        lines = prioritized + rest
+        if not lines:
+            return "", budget
+        body = "\n".join(lines)[:budget]
+        return f"// {path.stem} — real callable signatures:\n{body}", budget - len(body)
 
-    def emit_regex(path: Path) -> None:
-        nonlocal budget
-        if path in seen or budget <= 0:
-            return
-        seen.add(path)
+    def render_regex(path: Path, budget: int) -> tuple[str, int]:
         txt = path.read_text(encoding="utf-8", errors="replace")
-        sigs = []
+        prioritized: list[str] = []
+        rest: list[str] = []
         for mo in _FUNC_SIG_RE.finditer(txt):
             sig = re.sub(r"\s+", " ", mo.group(0)).strip()
             if "external" not in sig and "public" not in sig:
                 continue
             sig = sig + ";"
-            sigs.append(sig)
+            fname_m = re.match(r"function\s+(\w+)", sig)
+            fname = fname_m.group(1) if fname_m else "?"
+            entry = [sig]
             mods = _sig_modifiers(sig)
             if mods:
-                fname_m = re.match(r"function\s+(\w+)", sig)
-                fname = fname_m.group(1) if fname_m else "?"
                 # Name the function explicitly — two different functions can share
                 # the exact same modifier (e.g. both `onlyUser(user)`), and without a
                 # name the two annotation lines are byte-identical; a naive dedup
                 # (dict.fromkeys) would then silently drop the second one, exactly the
                 # function whose caller requirement most needed to survive.
-                sigs.append(f"    ⚠ CALLER REQUIREMENT on `{fname}(...)` above: "
+                entry.append(f"    ⚠ CALLER REQUIREMENT on `{fname}(...)` above: "
                            f"{', '.join(mods)} — vm.prank/startPrank the required "
                            f"address BEFORE calling it, or it reverts.")
-        if sigs:
-            body = "\n".join(dict.fromkeys(sigs))[:budget]
-            budget -= len(body)
-            blocks.append(f"// {path.stem} — real callable signatures:\n{body}")
+            (prioritized if fname in wanted_methods else rest).extend(entry)
+        sigs = prioritized + rest
+        if not sigs:
+            return "", budget
+        body = "\n".join(dict.fromkeys(sigs))[:budget]
+        return f"// {path.stem} — real callable signatures:\n{body}", budget - len(body)
 
-    emit = emit_ast if symbol_index is not None else emit_regex
+    render = render_ast if symbol_index is not None else render_regex
 
     for name in names:
         matches = [p for p in project.rglob(f"{name}.sol")
@@ -631,9 +647,16 @@ def build_callable_api(project: Path, location: str, symbol_index: SymbolIndex |
         if not matches:
             continue
         primary = matches[0]
-        emit(primary)
-        for dep in _resolve_local_imports(primary, primary.read_text(encoding="utf-8", errors="replace")):
-            emit(dep)
+        to_visit = [primary, *_resolve_local_imports(
+            primary, primary.read_text(encoding="utf-8", errors="replace"))]
+        budget = per_name_budget
+        for path in to_visit:
+            if path in seen or budget <= 0:
+                continue
+            seen.add(path)
+            block, budget = render(path, budget)
+            if block:
+                blocks.append(block)
     return "\n\n".join(blocks)
 
 
