@@ -900,7 +900,24 @@ def _render_lookup_response(resolved: list[tuple[str, list]]) -> str:
     blocks = []
     for name, matches in resolved:
         if matches:
-            body = "\n\n".join(f"// {m.contract} ({m.kind})\n{m.definition}" for m in matches)
+            parts = []
+            for m in matches:
+                text = f"// {m.contract} ({m.kind})\n{m.definition}"
+                if m.contract and m.kind in ("struct", "enum"):
+                    # Live H-01 run (2026-07-05): the model kept writing
+                    # `import { TExitParams } from "ISharesCooldown.sol";` for a
+                    # struct declared INSIDE that interface — invalid Solidity,
+                    # since a nested type is not a top-level declaration and
+                    # cannot be a named import target.
+                    text += (
+                        f"\n// NOTE: {m.name} is nested inside {m.contract} — it is "
+                        f"NOT a top-level declaration. Do NOT write "
+                        f"`import {{ {m.name} }} from ...;`. Instead import "
+                        f"{m.contract} itself and reference the type as "
+                        f"{m.contract}.{m.name}."
+                    )
+                parts.append(text)
+            body = "\n\n".join(parts)
             blocks.append(f"[DATA] {name} resolved to {len(matches)} definition(s):\n\n{body}")
         else:
             blocks.append(
