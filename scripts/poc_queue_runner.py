@@ -762,6 +762,32 @@ def _targeted_hints(forge_output: str, callable_api: str, file_map: str) -> str:
     return "\n".join(dict.fromkeys(hints))
 
 
+_FAIL_LINE_RE = re.compile(r"\[FAIL[:.][^\n]*")
+
+
+def revert_hints(stdout: str, stderr: str, task: dict) -> str:
+    """The test COMPILED and RAN but did not pass — a genuine execution failure
+    (wrong revert, no revert where the finding expects one, or an assertion that
+    didn't hold), not a compile error. `_targeted_hints` cannot help here (there is
+    no compiler error to resolve against signatures); the fix has to reconsider the
+    EXPLOIT's own logic against the finding's own description. Quote forge's actual
+    [FAIL...] line(s) plus the finding text so the model re-derives the trigger
+    condition instead of guessing again from scratch."""
+    fails = _FAIL_LINE_RE.findall(stdout + "\n" + stderr)
+    if not fails:
+        return ""
+    return (
+        "The test compiled and ran, but did NOT pass — this is an EXPLOIT-LOGIC problem, "
+        "not a compile error:\n" + "\n".join(dict.fromkeys(fails))[:800] +
+        f"\n\nRe-read the finding and fix the SEQUENCE/PRECONDITIONS, not just syntax:\n"
+        f"Title: {task['title']}\nDescription: {task['description']}\n"
+        "Common causes: wrong order of calls, a precondition never actually set up "
+        "(e.g. a required state/role/balance not established before the exploit step), "
+        "asserting the wrong condition, or expecting a revert that the real code doesn't "
+        "produce at that call (check which call in the sequence should actually revert)."
+    )
+
+
 def _grounding(project: Path, location: str, scaffold: str, callable_api: str) -> tuple[str, str]:
     """Source grounding + scaffold. With a scaffold the base carries the setup, and
     with a callable_api the signatures are already extracted, so the raw source is
@@ -816,6 +842,9 @@ def main() -> None:
                     help="Ollama endpoint — set to a cloud-GPU tunnel URL for real speed (env OLLAMA_HOST)")
     ap.add_argument("--attempts", type=int, default=MAX_ATTEMPTS, help="draft + repairs per task")
     ap.add_argument("--limit", type=int, default=0, help="PoC only the first N tasks (0 = all); extraction always covers the whole report")
+    ap.add_argument("--only", default="", help="comma-separated finding id(s) to PoC (e.g. H-01) — "
+                    "extraction still covers the whole report, but only these ids are drafted. "
+                    "Takes priority over --limit; case-insensitive.")
     ap.add_argument("--extract-only", action="store_true", help="just print the model's task list and exit")
     ap.add_argument("--max-minutes", type=float, default=0,
                     help="stop starting new findings after this wall-clock budget (0 = no cap). "
@@ -846,6 +875,10 @@ def main() -> None:
         if not fork_rpc:
             print("--fork requires env MAINNET_RPC_URL (a mainnet archive RPC, e.g. Alchemy)", file=sys.stderr)
             sys.exit(2)
+    # Under a fork, "compiles but doesn't pass" is no longer path-A's success bar: a
+    # revert now means the exploit genuinely didn't trigger against real state (there's
+    # no "offline, no fork" excuse left), so a real forge PASS is the only honest bar.
+    require_pass_effective = args.require_pass or bool(fork_rpc)
 
     poc_dir = args.project / POC_SUBDIR
     log_file = poc_dir / "_runner_progress.jsonl"
@@ -900,7 +933,14 @@ def main() -> None:
     if args.extract_only:
         return
 
-    todo = tasks[: args.limit] if args.limit else tasks
+    if args.only:
+        wanted = {x.strip().lower() for x in args.only.split(",") if x.strip()}
+        todo = [t for t in tasks if t["id"].lower() in wanted]
+        missing = wanted - {t["id"].lower() for t in todo}
+        if missing:
+            log({"event": "only_ids_not_found", "missing": sorted(missing)})
+    else:
+        todo = tasks[: args.limit] if args.limit else tasks
     sandbox = DockerSandbox()
     run_start = time.monotonic()
 
@@ -909,8 +949,8 @@ def main() -> None:
     file_map = "" if args.no_file_map else build_file_manifest(args.project)
     log({"event": "scaffold_mode",
          "source": "operator" if args.test_scaffold else ("off" if args.no_scaffold else "auto"),
-         "file_map_chars": len(file_map),
-         "bar": "pass" if args.require_pass else "compile+real"})
+         "file_map_chars": len(file_map), "fork": bool(fork_rpc),
+         "bar": "pass" if require_pass_effective else "compile+real"})
 
     # ── Step 2: per task, draft → run → fix → rerun (up to N attempts) ───────
     for task in todo:
@@ -997,29 +1037,38 @@ def main() -> None:
             if real_pass:
                 outcome = "passed"                     # full success: green + real
                 break
-            if compiled_real and not args.require_pass:
+            if compiled_real and not require_pass_effective:
                 outcome = "compiled"                   # path-A success: builds + real (fork deferred)
                 break
             if test.passed and defects:
                 log({"event": "rejected_vacuous", "finding_id": fid, "attempt": attempt, "defects": defects})
             if attempt == args.attempts:
                 outcome = ("vacuous_pass" if test.passed else
+                           "reverted_exhausted" if compiled and not defects else
                            "compile_only_defective" if compiled else "exhausted")
                 break
             # Feed back: raw forge output + structural defects + TARGETED authoritative
-            # fixes (each compiler error resolved against the real signatures/paths).
+            # fixes (compile errors resolved against real signatures/paths) + REVERT
+            # hints (a genuine execution failure needs exploit-logic feedback, not a
+            # compile-error fix — the two error-fix cycles are handled separately).
             defect_note = (
                 "\n\nSTRUCTURAL PROBLEMS — the test builds but proves nothing; fix ALL:\n- "
                 + "\n- ".join(defects) if defects else ""
             )
             hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map)
             hint_note = f"\n\nTARGETED FIXES (authoritative — apply exactly):\n{hints}" if hints else ""
+            revert_note = ""
+            if compiled and not hints and not defects:
+                revert_note = "\n\n" + revert_hints(test.stdout, test.stderr, task)
             if hints:
                 log({"event": "targeted_hints", "finding_id": fid, "attempt": attempt,
                      "hints": hints[:300]})
+            elif revert_note.strip():
+                log({"event": "revert_hints", "finding_id": fid, "attempt": attempt,
+                     "hints": revert_note[:300]})
             try:
                 code = fix(client, task, code,
-                           test.stdout + "\n" + test.stderr + defect_note + hint_note,
+                           test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note,
                            args.project, scaffold, example, file_map, callable_api)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
