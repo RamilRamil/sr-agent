@@ -41,6 +41,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sr_agent.llm_core.local_client import LocalClient, ModelUnavailableError
 from sr_agent.tools.sandbox import DockerSandbox, SandboxUnavailable
 from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
+from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 
 from scripts.solidity_index import SymbolIndex
 
@@ -1204,10 +1205,48 @@ def _grounding(project: Path, location: str, scaffold: str, callable_api: str) -
     return source, scaffold_field
 
 
+def _traced_round_trip(
+    name: str, client: LocalClient, prompt: str,
+    symbol_index: SymbolIndex | None, lookup_budget: int,
+    on_lookup, protocol_mode: str,
+    tracer: Tracer, trace,
+) -> str:
+    """Runs the draft/fix round-trip (marker or tool-calling protocol) and logs
+    it as one Langfuse generation — prompt, final code, and every lookup made
+    during it — so a finding's full agent trajectory (draft, every attempt's
+    fix, every lookup) is one browsable, comparable-across-runs Langfuse trace
+    instead of a flat JSONL line or an ad-hoc file dump."""
+    lookups_seen: list[dict] = []
+
+    def _record(sym: str, resolved: bool, match_count: int) -> None:
+        lookups_seen.append({"symbol": sym, "resolved": resolved, "match_count": match_count})
+        if on_lookup:
+            on_lookup(sym, resolved, match_count)
+
+    if protocol_mode == "marker":
+        full_prompt = prompt + _LOOKUP_MARKER_SUFFIX
+        code = _generate_with_lookups(
+            client, full_prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
+            symbol_index, lookup_budget, _record,
+        )
+    else:
+        full_prompt = prompt
+        code = _generate_with_tool_calls(
+            client, full_prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
+            symbol_index, lookup_budget, _record,
+        )
+    tracer.generation(
+        trace, name=name, model=client.model, input=full_prompt, output=code,
+        metadata={"protocol_mode": protocol_mode, "lookups": lookups_seen},
+    )
+    return code
+
+
 def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
           example: str = "", files: str = "", callable_api: str = "",
           symbol_index: SymbolIndex | None = None, lookup_budget: int = DEFAULT_LOOKUP_BUDGET,
-          on_lookup=None, protocol_mode: str = "marker") -> str:
+          on_lookup=None, protocol_mode: str = "marker",
+          tracer: Tracer = NOOP_TRACER, trace=None) -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
     prompt = DRAFT_PROMPT.format(
         fid=task["id"], title=task["title"], location=task["location"],
@@ -1215,22 +1254,17 @@ def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
         source=source, scaffold=scaffold_field, example=example or "(none)",
         files=files or "(none)", callable=callable_api or "(none)",
     )
-    if protocol_mode == "marker":
-        prompt += _LOOKUP_MARKER_SUFFIX
-        return _generate_with_lookups(
-            client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
-            symbol_index, lookup_budget, on_lookup,
-        )
-    return _generate_with_tool_calls(
-        client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
-        symbol_index, lookup_budget, on_lookup,
+    return _traced_round_trip(
+        "draft", client, prompt, symbol_index, lookup_budget, on_lookup,
+        protocol_mode, tracer, trace,
     )
 
 
 def fix(client: LocalClient, task: dict, previous: str, error: str,
         project: Path, scaffold: str = "", example: str = "", files: str = "", callable_api: str = "",
         symbol_index: SymbolIndex | None = None, lookup_budget: int = DEFAULT_LOOKUP_BUDGET,
-        on_lookup=None, protocol_mode: str = "marker") -> str:
+        on_lookup=None, protocol_mode: str = "marker",
+        tracer: Tracer = NOOP_TRACER, trace=None) -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
     prompt = FIX_PROMPT.format(
         fid=task["id"], ident=_ident(task["id"]),
@@ -1238,15 +1272,9 @@ def fix(client: LocalClient, task: dict, previous: str, error: str,
         source=source, scaffold=scaffold_field, example=example or "(none)",
         files=files or "(none)", callable=callable_api or "(none)",
     )
-    if protocol_mode == "marker":
-        prompt += _LOOKUP_MARKER_SUFFIX
-        return _generate_with_lookups(
-            client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
-            symbol_index, lookup_budget, on_lookup,
-        )
-    return _generate_with_tool_calls(
-        client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
-        symbol_index, lookup_budget, on_lookup,
+    return _traced_round_trip(
+        "fix", client, prompt, symbol_index, lookup_budget, on_lookup,
+        protocol_mode, tracer, trace,
     )
 
 
@@ -1353,6 +1381,20 @@ def main() -> None:
     protocol_mode, protocol_source = _select_protocol(args.lookup_protocol, client)
     log({"event": "lookup_protocol", "mode": protocol_mode, "source": protocol_source})
 
+    # Langfuse tracing (sr_agent/eval/tracer.py) — a no-op unless the project's
+    # already-deployed Langfuse has its keys set. One trace per finding groups
+    # every draft/fix attempt + every lookup made during it as one browsable,
+    # run-comparable agent trajectory — replaces flat JSONL/file-dump debugging
+    # (root-caused 2026-07-06: each attempt overwrites the same PoC path on
+    # disk, silently destroying visibility into an earlier attempt that may
+    # have compiled/run for real once a later attempt rewrites it).
+    tracer = Tracer(
+        secret_key=os.environ.get("LANGFUSE_SECRET_KEY", ""),
+        public_key=os.environ.get("LANGFUSE_PUBLIC_KEY", ""),
+        host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
+    )
+    log({"event": "tracer", "enabled": tracer.enabled})
+
     # ── Step 1: model builds its own task list from the report ───────────────
     log({"event": "extract_start", "report": str(args.report), "model": args.model})
     try:
@@ -1438,8 +1480,14 @@ def main() -> None:
             return _cb
 
         try:
-            code = draft(client, task, args.project, scaffold, example, file_map, callable_api,
-                        symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode)
+            # session_id=fid links every draft/fix attempt for this finding as
+            # one browsable sequence in Langfuse's Sessions view — the actual
+            # agent trajectory, without needing to re-indent this whole loop
+            # body under one giant enclosing span.
+            with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
+                code = draft(client, task, args.project, scaffold, example, file_map, callable_api,
+                            symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode,
+                            tracer, trace)
         except ModelUnavailableError as e:
             log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
             continue
@@ -1560,10 +1608,12 @@ def main() -> None:
                      "reason": fail_sig[:2]})
             prev_error_sig, prev_fail_sig = error_sig, fail_sig
             try:
-                code = fix(client, task, code,
-                           test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
-                           args.project, scaffold, example, file_map, callable_api,
-                           symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode)
+                with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
+                    code = fix(client, task, code,
+                               test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
+                               args.project, scaffold, example, file_map, callable_api,
+                               symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode,
+                               tracer, trace)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
                 outcome = "fix_failed"
