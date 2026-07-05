@@ -54,7 +54,12 @@ NUM_CTX = 32768                     # base + source + file-map + example; 32b on
 MAX_ATTEMPTS = 3                    # draft + up to 2 repairs
 RUN_TIMEOUT_S = 600.0              # cold `forge` compile of the whole project is slow
 GEN_TIMEOUT_S = 1800.0            # CPU-only Ollama-in-Docker is slow; a big report/PoC needs headroom
-EXTRACT_PREDICT = 3000             # cap output tokens so a looping small model can't run forever
+EXTRACT_PREDICT = 6000             # cap output tokens so a looping small model can't run forever —
+                                    # was 3000, but a real 23-task extraction runs ~2100-2500 tokens
+                                    # with little headroom (root-caused 2026-07-05: a run hit the cap
+                                    # mid-string at 11814 chars, more verbose than a prior successful
+                                    # 8498-char run for the identical report — normal sampling variance,
+                                    # not a fluke; 6000 gives real margin instead of hoping for terseness
 POC_PREDICT = 2048
 
 # ── Prompts (the report / errors go in as DATA, never as instructions) ───────
@@ -1087,6 +1092,31 @@ LOOKUP_TOOL_SCHEMA = {
 }
 
 
+_RAW_TOOL_CALL_RE = re.compile(r"<function=(\w+)>(.*?)(?:</function>|$)", re.DOTALL)
+
+
+def _parse_raw_tool_call_text(content: str) -> list[dict]:
+    """Some Qwen-family builds occasionally write a function call as literal
+    TEXT (`<function=lookup_symbol>{"name": "X"}</function>`) instead of
+    populating Ollama's structured `message.tool_calls` — observed live
+    2026-07-05 on the real `qwen3-coder:30b` H-01 attempt 1: it leaked
+    `<function=lookup_symbol>` as line 1 of the written PoC file, breaking
+    compilation (`Error (7858): Expected pragma, import directive...`). Parse
+    this as a real (if malformed) tool call rather than letting it reach the
+    PoC file as garbage source."""
+    calls = []
+    for name, body in _RAW_TOOL_CALL_RE.findall(content):
+        args: dict = {}
+        try:
+            args = json.loads(body.strip())
+        except (json.JSONDecodeError, ValueError):
+            m = re.search(r'"name"\s*:\s*"([^"]+)"', body) or re.search(r"([A-Za-z_]\w+)", body)
+            if m:
+                args = {"name": m.group(1)}
+        calls.append({"function": {"name": name, "arguments": args}})
+    return calls
+
+
 def _generate_with_tool_calls(
     client: LocalClient, prompt: str, options: dict,
     symbol_index: SymbolIndex | None, budget: int,
@@ -1104,12 +1134,23 @@ def _generate_with_tool_calls(
     tools = [LOOKUP_TOOL_SCHEMA] if symbol_index is not None else None
     while True:
         msg = client.chat(messages, tools=tools, options=options)
-        calls = msg.get("tool_calls") or []
+        content = msg.get("content", "")
+        real_calls = msg.get("tool_calls") or []
+        calls = real_calls or _parse_raw_tool_call_text(content)
         if not calls or symbol_index is None or used >= budget:
-            return _strip_fences(msg.get("content", ""))
+            # FR-007: never let a raw <function=...> fragment reach the PoC
+            # file even when the round-trip is ending (budget exhausted, or a
+            # malformed call couldn't be parsed at all).
+            return _strip_fences(_RAW_TOOL_CALL_RE.sub("", content))
         to_resolve = calls[: budget - used]
-        messages.append({"role": "assistant", "content": msg.get("content", ""),
-                         "tool_calls": to_resolve})
+        # Only attach tool_calls to the replayed assistant turn when Ollama
+        # itself produced them — for the raw-text fallback, `content` already
+        # contains what the model actually wrote; echoing a synthesized
+        # tool_calls field it never emitted risks confusing the chat template.
+        assistant_msg = {"role": "assistant", "content": content}
+        if real_calls:
+            assistant_msg["tool_calls"] = to_resolve
+        messages.append(assistant_msg)
         for call in to_resolve:
             name = ((call.get("function") or {}).get("arguments") or {}).get("name", "")
             matches = symbol_index.lookup(name) if name else []
