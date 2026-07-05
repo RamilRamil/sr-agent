@@ -732,12 +732,50 @@ def _path_for(file_map: str, name: str) -> str:
     return ""
 
 
-def _targeted_hints(forge_output: str, callable_api: str, file_map: str) -> str:
+def _sig_by_method(callable_api: str, method: str) -> str:
+    """Every real signature named `method`, across all [callable_api] blocks — a
+    call-site error doesn't name its contract, only its file:line, so this searches
+    by method name instead of by contract."""
+    out = [ln for block in callable_api.split("\n\n") for ln in block.splitlines()[1:]
+           if re.search(rf"\bfunction\s+{re.escape(method)}\s*\(", ln)]
+    return "\n".join(dict.fromkeys(out))[:600]
+
+
+_ERROR_LINE_RE = re.compile(r"-->\s*\S+\.t\.sol:(\d+):\d+")
+_CALL_RE = re.compile(r"\.(\w+)\s*\(")
+
+
+def _line_level_hints(forge_output: str, code: str, callable_api: str) -> list[str]:
+    """For argument-type/count errors (9553, 6160), the compiler names a LINE, not a
+    signature. Pull that exact line from the current draft, find the method it calls,
+    and quote that method's REAL signature(s) from [callable_api] — turns 3 stalled
+    attempts on 'invalid implicit conversion' (observed 2026-07-05, H-01: the model
+    kept guessing `cancel`'s argument types/order across attempts with no new signal)
+    into one authoritative correction."""
+    if "Invalid type for argument" not in forge_output and "Wrong argument count" not in forge_output:
+        return []
+    lines = code.splitlines()
+    out: list[str] = []
+    for lineno in dict.fromkeys(_ERROR_LINE_RE.findall(forge_output)):
+        idx = int(lineno) - 1
+        if not (0 <= idx < len(lines)):
+            continue
+        src_line = lines[idx].strip()
+        for method in dict.fromkeys(_CALL_RE.findall(src_line)):
+            sigs = _sig_by_method(callable_api, method)
+            if sigs:
+                out.append(f"Line {lineno} calls `.{method}(...)` — your arguments don't match its REAL "
+                          f"signature. Use EXACTLY:\n{sigs}\nagainst: {src_line}")
+    return out
+
+
+def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: str = "") -> str:
     """Turn each compiler error into an AUTHORITATIVE, specific fix by resolving it
     against ground truth (real signatures + real paths). The compiler says exactly
     what's wrong; we know exactly what's right — connect the two so the repair is a
     precise instruction, not a hope."""
     hints: list[str] = []
+    hints.extend(_line_level_hints(forge_output, code, callable_api))
     # 9582 — member not found on a contract → list that contract's real functions
     for member, contract in re.findall(
             r'Member "(\w+)" not found[^.]*?in contract (\w+)', forge_output):
@@ -995,6 +1033,7 @@ def main() -> None:
 
         outcome = "unknown"
         res = None
+        prev_error_sig: tuple | None = None
         for attempt in range(1, args.attempts + 1):
             res = write_poc(fid, poc_dir, generator=lambda _f, c=code: c)
             rel = str(res.path.relative_to(args.project))
@@ -1055,7 +1094,7 @@ def main() -> None:
                 "\n\nSTRUCTURAL PROBLEMS — the test builds but proves nothing; fix ALL:\n- "
                 + "\n- ".join(defects) if defects else ""
             )
-            hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map)
+            hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map, code)
             hint_note = f"\n\nTARGETED FIXES (authoritative — apply exactly):\n{hints}" if hints else ""
             revert_note = ""
             if compiled and not hints and not defects:
@@ -1066,9 +1105,23 @@ def main() -> None:
             elif revert_note.strip():
                 log({"event": "revert_hints", "finding_id": fid, "attempt": attempt,
                      "hints": revert_note[:300]})
+            # Stall detection: the SAME error (code + line) surviving into the next
+            # attempt means the previous fix didn't even try to address it — escalate
+            # rather than silently repeat the same hint (observed 2026-07-05, H-01: 3
+            # consecutive attempts hit the identical "invalid implicit conversion" at
+            # the same line with no new guidance in between).
+            error_sig = tuple(sorted(re.findall(
+                r"Error \((\d+)\)[\s\S]{0,200}?-->[^\n]*?:(\d+):", test.stdout + test.stderr)))
+            stall_note = ""
+            if error_sig and error_sig == prev_error_sig:
+                stall_note = ("\n\nSTALL: the previous fix did NOT resolve this — the identical error is still "
+                             "at the same line. Do not repeat the same edit; re-read the targeted fix above and "
+                             "change the actual argument types/order/names, not just formatting.")
+                log({"event": "stall_detected", "finding_id": fid, "attempt": attempt})
+            prev_error_sig = error_sig
             try:
                 code = fix(client, task, code,
-                           test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note,
+                           test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
                            args.project, scaffold, example, file_map, callable_api)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
