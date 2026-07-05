@@ -471,15 +471,38 @@ def read_scaffold(project: Path, paths: list[Path]) -> str:
 FILEMAP_CHAR_BUDGET = 10000
 
 
-def build_file_manifest(project: Path) -> str:
+def build_file_manifest(project: Path, symbol_index: SymbolIndex | None = None) -> str:
     """A compact, authoritative list of every real contract/interface under
     contracts/ and its exact import path from audit/poc/. Counters the model's
     habit of inventing a 'natural' interface name (IUnstakeCooldown) when the real
     one (ICooldown) is only buried in a long source block — a flat allow-list is
-    far easier for a small model to attend to than reading it out of source."""
+    far easier for a small model to attend to than reading it out of source.
+
+    With `symbol_index` (feature 007 T020), names come from the parsed AST's real
+    contract/interface declarations, not the `.sol` filename — this surfaces every
+    real interface a multi-interface file bundles under one misleading filename
+    (verified 2026-07-05 against the real target: a file `Interfaces.sol` hid
+    `IAavePool`, `IERC20Cooldown`, `IEulerVault`, and others behind one filename
+    entry; the AST path lists each real name). Known, accepted trade-off (same
+    shape as research.md R8 elsewhere in this feature): the ~4 files that fail to
+    parse entirely drop out of the manifest instead of showing a (possibly
+    misleading) filename-based guess. Falls back to the filename-based scan when
+    the index is unavailable (`--no-symbol-index`)."""
     tracked = _tracked_sol(project)
     poc_dir = project / POC_SUBDIR
+    contracts_dir = (project / "contracts").resolve()
     lines: list[str] = []
+    if symbol_index is not None:
+        for sym in sorted(symbol_index.top_level_symbols(), key=lambda s: s.name):
+            rp = sym.file.resolve()
+            if contracts_dir not in rp.parents:
+                continue    # same scope as the regex fallback: contracts/ only
+            if tracked and rp not in tracked:
+                continue
+            if _SKIP_DIRS & set(sym.file.relative_to(project).parts):
+                continue
+            lines.append(f"{sym.name}: {os.path.relpath(sym.file, poc_dir)}")
+        return "\n".join(dict.fromkeys(lines))[:FILEMAP_CHAR_BUDGET]
     for p in sorted((project / "contracts").rglob("*.sol")):
         if not p.is_file():
             continue
@@ -532,12 +555,18 @@ def _sig_modifiers(sig: str) -> list[str]:
             if name not in _SIG_TAIL_KEYWORDS]
 
 
-def build_callable_api(project: Path, location: str) -> str:
+def build_callable_api(project: Path, location: str, symbol_index: SymbolIndex | None = None) -> str:
     """The exact external/public function SIGNATURES of the finding's target
     contracts + their direct interfaces. The file map gives real NAMES; this gives
     real SIGNATURES so the model stops guessing methods/args (observed 2026-07-05:
     32b called `ICooldown.requestUnstake(3 args)` when the real method is
-    `transfer(4 args)` — the signature was only buried in the source block)."""
+    `transfer(4 args)` — the signature was only buried in the source block).
+
+    With `symbol_index` (feature 007 T020), signatures + modifiers come from the
+    parsed AST (`SymbolIndex.functions_in_file`), not a hand-rolled function-header
+    regex — this closes the dedup-collision bug class structurally (each function is
+    its own Symbol; nothing depends on two rendered-text lines happening to differ).
+    Falls back to the regex scan when the index is unavailable (`--no-symbol-index`)."""
     names = _location_names(location)
     if not names:
         return ""
@@ -545,7 +574,26 @@ def build_callable_api(project: Path, location: str) -> str:
     blocks: list[str] = []
     budget = CALLABLE_API_BUDGET
 
-    def emit(path: Path) -> None:
+    def emit_ast(path: Path) -> None:
+        nonlocal budget
+        if path in seen or budget <= 0:
+            return
+        seen.add(path)
+        lines: list[str] = []
+        for m in symbol_index.functions_in_file(path):
+            if m.visibility not in ("external", "public"):
+                continue
+            lines.append(m.definition)
+            if m.modifiers:
+                lines.append(f"    ⚠ CALLER REQUIREMENT on `{m.name}(...)` above: "
+                             f"{', '.join(m.modifiers)} — vm.prank/startPrank the required "
+                             f"address BEFORE calling it, or it reverts.")
+        if lines:
+            body = "\n".join(lines)[:budget]
+            budget -= len(body)
+            blocks.append(f"// {path.stem} — real callable signatures:\n{body}")
+
+    def emit_regex(path: Path) -> None:
         nonlocal budget
         if path in seen or budget <= 0:
             return
@@ -574,6 +622,8 @@ def build_callable_api(project: Path, location: str) -> str:
             body = "\n".join(dict.fromkeys(sigs))[:budget]
             budget -= len(body)
             blocks.append(f"// {path.stem} — real callable signatures:\n{body}")
+
+    emit = emit_ast if symbol_index is not None else emit_regex
 
     for name in names:
         matches = [p for p in project.rglob(f"{name}.sol")
@@ -1130,17 +1180,19 @@ def main() -> None:
     sandbox = DockerSandbox()
     run_start = time.monotonic()
 
-    # Authoritative file map (project-wide) — the real names/paths, so the model
-    # imports from a flat allow-list instead of inventing 'natural' interface names.
-    file_map = "" if args.no_file_map else build_file_manifest(args.project)
-
     # AST-backed SymbolIndex (feature 007) — built once per run, real grammar (not
-    # regex), so the agentic LOOKUP: protocol can resolve any struct/enum/function/
-    # modifier the static blocks above didn't happen to anticipate.
+    # regex). Feeds BOTH the static grounding blocks below (T020: file map + callable
+    # API are re-platformed onto it, closing the whack-a-mole regex-fix pattern for
+    # those too) AND the agentic LOOKUP: protocol (gated separately by --lookup-budget,
+    # not by whether the index itself was built).
     symbol_index = None
-    if not args.no_symbol_index and args.lookup_budget > 0:
+    if not args.no_symbol_index:
         symbol_index = SymbolIndex.build(args.project)
         log({"event": "symbol_index_built", "unparsed_files": len(symbol_index.unparsed_files)})
+
+    # Authoritative file map (project-wide) — the real names/paths, so the model
+    # imports from a flat allow-list instead of inventing 'natural' interface names.
+    file_map = "" if args.no_file_map else build_file_manifest(args.project, symbol_index)
 
     log({"event": "scaffold_mode",
          "source": "operator" if args.test_scaffold else ("off" if args.no_scaffold else "auto"),
@@ -1169,7 +1221,7 @@ def main() -> None:
         example_path = resolve_example(args.project, args.example_poc, args.no_example,
                                        scaffold_paths, exclude_stems=[fid, *target_stems])
         example = read_example(args.project, example_path)
-        callable_api = "" if args.no_file_map else build_callable_api(args.project, task["location"])
+        callable_api = "" if args.no_file_map else build_callable_api(args.project, task["location"], symbol_index)
         guard = bool(scaffold) and _base_has_nonvirtual_setup(scaffold)
         log({"event": "grounding", "finding_id": fid,
              "scaffold": [str(p.relative_to(args.project)) for p in scaffold_paths],

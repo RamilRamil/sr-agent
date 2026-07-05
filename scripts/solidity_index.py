@@ -38,6 +38,7 @@ class Symbol:
     file: Path
     definition: str              # the real, complete rendering
     modifiers: tuple[str, ...] = field(default_factory=tuple)  # only for kind == "function"
+    visibility: str = ""         # only for kind == "function" (external/public/internal/private/"")
 
 
 def _type_str(type_node: dict | None) -> str:
@@ -77,13 +78,15 @@ def _params_str(param_list: dict | None) -> str:
     return ", ".join(_param_str(p) for p in param_list.get("parameters", []))
 
 
-def _render_function(fn: dict) -> tuple[str, tuple[str, ...]]:
-    """(definition text, modifier invocation strings) for a raw FunctionDefinition node."""
+def _render_function(fn: dict) -> tuple[str, tuple[str, ...], str]:
+    """(definition text, modifier invocation strings, visibility) for a raw
+    FunctionDefinition node."""
     name = fn.get("name") or ("constructor" if fn.get("isConstructor") else "<fallback/receive>")
     params = _params_str(fn.get("parameters"))
+    visibility = fn.get("visibility") or ""
     tail: list[str] = []
-    if fn.get("visibility"):
-        tail.append(fn["visibility"])
+    if visibility:
+        tail.append(visibility)
     if fn.get("stateMutability"):
         tail.append(fn["stateMutability"])
     mods: list[str] = []
@@ -100,7 +103,7 @@ def _render_function(fn: dict) -> tuple[str, tuple[str, ...]]:
     sig = f"function {name}({params}) {' '.join(tail)}".rstrip()
     if ret:
         sig += f" returns ({ret})"
-    return sig + ";", tuple(mods)
+    return sig + ";", tuple(mods), visibility
 
 
 def _render_struct(node: dict) -> str:
@@ -139,6 +142,7 @@ class SymbolIndex:
 
     def __init__(self) -> None:
         self._symbols: dict[str, list[Symbol]] = {}
+        self._by_file: dict[Path, list[Symbol]] = {}
         self.unparsed_files: list[Path] = []
 
     def lookup(self, name: str) -> list[Symbol]:
@@ -153,8 +157,24 @@ class SymbolIndex:
             matches = list(self._symbols.get(bare, []))
         return matches
 
+    def functions_in_file(self, path: Path) -> list[Symbol]:
+        """Every function Symbol declared directly in `path` — grammar-accurate
+        replacement for `poc_queue_runner.py`'s old per-file regex signature scan
+        (feature 007 T020: closes the SC-002 dedup-collision bug class structurally,
+        since nothing here depends on rendered-text deduplication)."""
+        return [s for s in self._by_file.get(path.resolve(), []) if s.kind == "function"]
+
+    def top_level_symbols(self) -> list[Symbol]:
+        """Every contract/interface/library Symbol — the real name+file pairs behind
+        `poc_queue_runner.py`'s file map (feature 007 T020)."""
+        return [s for s in self._by_file_all() if s.kind in ("contract", "interface", "library")]
+
+    def _by_file_all(self) -> list[Symbol]:
+        return [s for syms in self._by_file.values() for s in syms]
+
     def _add(self, sym: Symbol) -> None:
         self._symbols.setdefault(sym.name, []).append(sym)
+        self._by_file.setdefault(sym.file.resolve(), []).append(sym)
 
     def _index_contract(self, contract_node: dict, file: Path) -> None:
         cname = contract_node.get("name", "?")
@@ -165,8 +185,8 @@ class SymbolIndex:
             t = sub.get("type")
             try:
                 if t == "FunctionDefinition" and sub.get("name"):
-                    definition, mods = _render_function(sub)
-                    self._add(Symbol(sub["name"], "function", cname, file, definition, mods))
+                    definition, mods, visibility = _render_function(sub)
+                    self._add(Symbol(sub["name"], "function", cname, file, definition, mods, visibility))
                 elif t == "StructDefinition":
                     self._add(Symbol(sub.get("name", "?"), "struct", cname, file, _render_struct(sub)))
                 elif t == "EnumDefinition":

@@ -189,7 +189,7 @@ whether H-01 converges.
 - [X] T019 [P] Confirm existing static grounding (file map, callable_api, scaffold,
   few-shot example) is unaffected — re-run this session's earlier offline validations
   for those blocks (FR-005; quickstart.md #5).
-- [ ] T020 (optional, explicitly secondary per research.md R6) Re-platform
+- [X] T020 (optional, explicitly secondary per research.md R6) Re-platform
   `build_file_manifest`/`build_callable_api` in `scripts/poc_queue_runner.py` on top of
   `SymbolIndex` instead of their current regex extraction — closes SC-002 for those
   blocks too, but MUST NOT block T001-T018 from shipping first.
