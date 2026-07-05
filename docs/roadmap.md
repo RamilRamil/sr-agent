@@ -92,7 +92,46 @@ Gotchas the human has confirmed reproducible — seed entries for Phase 5's stor
 ## Current focus (2026-07)
 Phase 4 (kernel↔pack boundary) and Phase 5 (operator frontend) have both landed. Two open threads:
 
-**(paused) Validate PoC-writing workability** — test whether the LOCAL-MODEL agent can draft a proof-of-code for **all** findings in an external audit report on a target project (the report + target live entirely OUTSIDE this repo — no audited/bug-bounty code ever enters the agent), composing its own detection+PoC task list. Include ALL findings — no prefiltering (a prior audit missed a vuln from exactly that assumption). Exercises the `write_poc`→`run_tests` path end-to-end on real contracts. Blocked on hardware (needs a fresh Colab T4 + cloudflared tunnel); next lever = `forge -vvvv` + grounding (transitive imports / few-shot from existing repo PoCs). Infra gotchas #3–#11 below were all found here.
+**PoC-writing workability — MILESTONE reached (2026-07-05).** The local model, driven
+by `scripts/poc_queue_runner.py`, composes its own finding list from an external report
+(no prefiltering) and drafts a PoC per finding. It exercises the write_poc→run_tests
+path against real contracts in the `--network none` sandbox. Two **orthogonal axes**
+had to be closed to get a PoC to compile, and each was closed by a distinct lever:
+
+1. **Signature/identifier precision** — the model invents "natural" names/methods
+   (`IUnstakeCooldown`, `requestUnstake`) even when the real ones are in a source block.
+   Closed by *authoritative grounding + deterministic repair*, in this order of impact:
+   honest git-tracked-only source → transitive dep interfaces → a **file map** (every real
+   contract/interface + import path) → **callable_api** (the exact function signatures of
+   the finding's contracts) → **compiler-error-driven targeted repair** (resolve each forge
+   error against those signatures/paths). Plus deterministic guards for mechanical errors
+   (non-virtual `setUp` override → 4334; wrong import depth; bare SPDX line).
+2. **Scaffold coverage** — the PoC can only use contracts the test base actually deploys.
+   The contest's own base (`StrataProtocolDeploymentBase`) deploys cdo/tranches/unstake but
+   NOT sharesCooldown, so sharesCooldown findings can't compile against it. Closed by
+   inheriting a **complete deploy base** (operator-provided `--test-scaffold`) + a real
+   worked **few-shot example** whose setup pattern the model copies.
+
+**Result:** with both axes closed (32b + complete base + full grounding), **all 3 sampled
+findings compiled on the first attempt** as structurally-real PoCs (`compiled_real`, gate
+passed — real base inheritance, real interfaces, real signatures, active assertions, no
+mocks). The invention problem is gone (H-02 used the real `transfer(...)`, not the invented
+`requestUnstake`).
+
+**Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from ONLY
+the target's original code?") — answered: it produces sophisticated near-compiling PoCs
+even honestly; (b) the *production tool* ("auto-generate compiling PoCs") — the operator
+supplies a complete deploy base (generated/own infra is fine here, it stands in for the
+operator's harness) and the tool delivers.
+
+**Open gap → correctness.** `compiled` ≠ *correctly reproduces the bug*: a PoC can compile
+with real APIs yet muddle the mechanism (observed: H-02 deploys but doesn't use
+`UnstakeCooldown`, operates on `sharesCooldown` instead). The structural gate can't judge
+this. The only objective correctness check is **path B — run against a mainnet fork**
+(`MAINNET_RPC_URL` + network in the sandbox): a green `forge` run means the revert/exploit
+actually triggers. That, plus tighter model reasoning about the specific mechanism, is the
+remaining work toward *useful* (not just compiling) PoCs. See [project_poc_vacuous_pass]
+memory. Infra gotchas #3–#11 below were all found on this thread.
 
 **(optional) Frontend remainder** — the 6 deferred Phase-5 tasks (US4 provenance, US3 audit trail, T031 docker run-through) — see Phase 5.
 
