@@ -225,6 +225,37 @@ finding is about. Not yet re-validated live (would need a 4th Kaggle session);
 5 new offline tests (`tests/unit/test_poc_queue_runner.py`) pin both fixes against
 a synthetic fixture reproducing the exact failure shape.
 
+**Spec 008 (2026-07-05, offline, no live model needed): native Ollama tool-calling
+for the lookup mechanism, replacing spec 007's `LOOKUP:` text-marker convention
+where the model/host supports it.** Spec 007's own research.md (R2) rejected
+native tool-calling at the time, explicitly because support was "unverified for
+these particular local builds," and closed with "revisit if the harness moves to
+models/backends with verified, reliable tool-calling support." This session
+verified exactly that (`qwen3-coder:30b` on Kaggle and both local
+`qwen2.5-coder:7b`/`:3b` all report `"tools"` in `/api/tags` capabilities), so spec
+008 fulfills that condition rather than reversing the earlier decision without new
+evidence. Shipped: `LocalClient.supports_tools()`/`chat()`
+([sr_agent/llm_core/local_client.py](../sr_agent/llm_core/local_client.py)), a
+`lookup_symbol` tool schema + `_generate_with_tool_calls()` round-trip parallel to
+spec 007's `_generate_with_lookups()`, and `_select_protocol()` implementing the
+full auto/tool/marker decision table (`--lookup-protocol` CLI flag) —
+[scripts/poc_queue_runner.py](../scripts/poc_queue_runner.py). Both protocols call
+the SAME `_render_lookup_response()` for rendering, so byte-identical resolution
+behavior across protocols (SC-002) holds by construction, not by two
+implementations kept in sync by hand — verified in
+`tests/unit/test_poc_queue_runner.py::test_tool_and_marker_protocols_render_lookup_identically`.
+260/260 tests pass (8 new in `test_poc_queue_runner.py`, 5 new in
+`test_local_client.py`). A live comparison against this session's H-01 baseline
+(T017/T018, explicitly optional per FR-009) was NOT run this session — three
+Kaggle GPU sessions were already spent validating spec 007's mechanism, and this
+feature's own completion bar is the offline suite above, not a new live claim.
+An attempted direct empirical re-verification of the raw `/api/chat` response
+shape against the project's own local, CPU-only `ollama` Docker container was
+abandoned after ~6 minutes with no response — a re-confirmation of gotcha #4
+below (CPU-only 7b generation not viable on this hardware), not a new finding;
+the request/response contract itself is Ollama's stable, documented API, not
+something genuinely in question.
+
 **Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from
 ONLY the target's original code?") — answered: it produces sophisticated
 near-compiling PoCs even honestly; (b) the *production tool* ("auto-generate compiling,

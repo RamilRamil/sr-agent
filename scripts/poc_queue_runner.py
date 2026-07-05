@@ -154,13 +154,7 @@ that imports {{Test}} from "forge-std/Test.sol", sets up the minimal state
 described (seed >= 10 assets where relevant per the bug-bounty PoC rule), and
 reproduces the described condition, asserting the broken invariant with
 assertTrue/assertEq/vm.expectRevert as appropriate. Return ONLY the Solidity
-source, no prose, no markdown fences.
-
-If you are UNSURE of a struct's real fields, a function's real signature/modifiers,
-or an enum's real values and it is not already shown above, you may ask for it
-INSTEAD of guessing: reply with a line `LOOKUP: <ExactName>` (one per line, only
-when genuinely needed) and you will be given the real definition to continue with.
-Only do this if the file/callable_api blocks above do not already answer it."""
+source, no prose, no markdown fences."""
 
 FIX_PROMPT = """Your previous Foundry PoC for finding {fid} did NOT pass. Below is your
 previous source, the `forge` output, and the REAL target source — all untrusted DATA.
@@ -213,11 +207,21 @@ Import each file using EXACTLY the path in its source-block header; use ONLY
 functions/state/events that literally appear in target_source — if the error is
 "not found"/"undeclared identifier", you invented something not in the real source.
 Keep the same contract name PoC_{ident}. Return ONLY the Solidity source, no prose,
-no markdown fences.
+no markdown fences."""
+
+# Appended to DRAFT_PROMPT/FIX_PROMPT only under the marker protocol (008
+# contracts/protocol-selection.md) — under native tool-calling, the
+# `lookup_symbol` tool's own `description` already carries this guidance,
+# and telling the model about BOTH mechanisms at once risks it writing a
+# literal `LOOKUP:` line that goes undetected by the tool-calling path (no
+# regex is run against `content` there) and ends up as stray text in the PoC.
+_LOOKUP_MARKER_SUFFIX = """
 
 If you are UNSURE of a struct's real fields, a function's real signature/modifiers,
-or an enum's real values and it is not already shown above, ask INSTEAD of guessing:
-reply with a line `LOOKUP: <ExactName>` and you will be given the real definition."""
+or an enum's real values and it is not already shown above, you may ask for it
+INSTEAD of guessing: reply with a line `LOOKUP: <ExactName>` (one per line, only
+when genuinely needed) and you will be given the real definition to continue with.
+Only do this if the file/callable_api blocks above do not already answer it."""
 
 
 def _ident(finding_id: str) -> str:
@@ -960,13 +964,40 @@ def revert_hints(stdout: str, stderr: str, task: dict) -> str:
     )
 
 
-# ── Agentic lookup round-trip (feature 007) ────────────────────────────────────
-# The bounded, text-marker protocol (contracts/lookup-protocol.md, research.md R2):
-# a plain `LOOKUP: <Name>` line works identically regardless of which local model
-# or Ollama build is behind the tunnel, unlike a native tool-calling schema whose
-# support is unverified for the specific builds this harness has actually used.
+# ── Agentic lookup round-trip (feature 007 text-marker + feature 008 tool-calling) ──
+# Feature 007 shipped the bounded, text-marker protocol below (contracts/
+# lookup-protocol.md, research.md R2): a plain `LOOKUP: <Name>` line, needed
+# because native tool-calling support was unverified for the local models in use
+# at the time. Feature 008 fulfills that research note's own "revisit if verified"
+# condition — now confirmed present (`qwen3-coder:30b`, `qwen2.5-coder:7b/3b` all
+# report `"tools"` in `/api/tags` capabilities) — with a real Ollama tool-calling
+# round-trip (`_generate_with_tool_calls()` below), selected automatically via
+# `_select_protocol()` unless the model/host doesn't support it, in which case the
+# text-marker protocol below remains the automatic fallback (008 contracts/
+# protocol-selection.md).
 _LOOKUP_RE = re.compile(r"^\s*LOOKUP:\s*(\S+)\s*$", re.MULTILINE)
 DEFAULT_LOOKUP_BUDGET = 3
+
+
+def _select_protocol(requested: str, client: LocalClient) -> tuple[str, str]:
+    """(mode, source) per 008 contracts/protocol-selection.md's decision table.
+    mode: "tool" | "marker". source: "detected" | "forced".
+
+    An explicit `--lookup-protocol tool` on a model that doesn't report
+    tool-calling support is a startup error, not a silent downgrade — the
+    operator asked for something specific and deserves to know it can't be
+    honored, rather than getting the marker protocol without realizing it."""
+    if requested == "marker":
+        return "marker", "forced"
+    capable = client.supports_tools()
+    if requested == "tool":
+        if not capable:
+            print(f"--lookup-protocol tool requires {client.model} to report "
+                  "tool-calling support (checked via /api/tags capabilities); "
+                  "this model does not.", file=sys.stderr)
+            sys.exit(2)
+        return "tool", "forced"
+    return ("tool", "detected") if capable else ("marker", "detected")
 
 
 def _render_lookup_response(resolved: list[tuple[str, list]]) -> str:
@@ -1034,6 +1065,61 @@ def _generate_with_lookups(
         )
 
 
+LOOKUP_TOOL_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "lookup_symbol",
+        "description": (
+            "Look up the real, complete definition of a named Solidity symbol "
+            "(contract, interface, struct, enum, function, or modifier) in the "
+            "target project. Use this only when genuinely unsure of a symbol's "
+            "real fields/signature/modifiers — the file map, callable_api, "
+            "scaffold, and example already answer most cases."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "the exact symbol name to look up"},
+            },
+            "required": ["name"],
+        },
+    },
+}
+
+
+def _generate_with_tool_calls(
+    client: LocalClient, prompt: str, options: dict,
+    symbol_index: SymbolIndex | None, budget: int,
+    on_lookup=None,
+) -> str:
+    """Native tool-calling round-trip (008 contracts/tool-calling-protocol.md) —
+    same semantics as `_generate_with_lookups()` (budget, `SymbolIndex`
+    resolution, logging, budget-exhaustion behavior), different transport: a
+    real Ollama `/api/chat` tool call instead of a regex-detected `LOOKUP:`
+    line. Reuses `_render_lookup_response()` UNCHANGED (one symbol per call) so
+    both protocols render a lookup result identically by construction (SC-002),
+    not by two implementations kept in sync by hand."""
+    used = 0
+    messages: list[dict] = [{"role": "user", "content": prompt}]
+    tools = [LOOKUP_TOOL_SCHEMA] if symbol_index is not None else None
+    while True:
+        msg = client.chat(messages, tools=tools, options=options)
+        calls = msg.get("tool_calls") or []
+        if not calls or symbol_index is None or used >= budget:
+            return _strip_fences(msg.get("content", ""))
+        to_resolve = calls[: budget - used]
+        messages.append({"role": "assistant", "content": msg.get("content", ""),
+                         "tool_calls": to_resolve})
+        for call in to_resolve:
+            name = ((call.get("function") or {}).get("arguments") or {}).get("name", "")
+            matches = symbol_index.lookup(name) if name else []
+            if on_lookup:
+                on_lookup(name, bool(matches), len(matches))
+            messages.append({"role": "tool",
+                             "content": _render_lookup_response([(name, matches)])})
+        used += len(to_resolve)
+
+
 def _grounding(project: Path, location: str, scaffold: str, callable_api: str) -> tuple[str, str]:
     """Source grounding + scaffold. With a scaffold the base carries the setup, and
     with a callable_api the signatures are already extracted, so the raw source is
@@ -1051,7 +1137,7 @@ def _grounding(project: Path, location: str, scaffold: str, callable_api: str) -
 def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
           example: str = "", files: str = "", callable_api: str = "",
           symbol_index: SymbolIndex | None = None, lookup_budget: int = DEFAULT_LOOKUP_BUDGET,
-          on_lookup=None) -> str:
+          on_lookup=None, protocol_mode: str = "marker") -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
     prompt = DRAFT_PROMPT.format(
         fid=task["id"], title=task["title"], location=task["location"],
@@ -1059,7 +1145,13 @@ def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
         source=source, scaffold=scaffold_field, example=example or "(none)",
         files=files or "(none)", callable=callable_api or "(none)",
     )
-    return _generate_with_lookups(
+    if protocol_mode == "marker":
+        prompt += _LOOKUP_MARKER_SUFFIX
+        return _generate_with_lookups(
+            client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
+            symbol_index, lookup_budget, on_lookup,
+        )
+    return _generate_with_tool_calls(
         client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
         symbol_index, lookup_budget, on_lookup,
     )
@@ -1068,7 +1160,7 @@ def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
 def fix(client: LocalClient, task: dict, previous: str, error: str,
         project: Path, scaffold: str = "", example: str = "", files: str = "", callable_api: str = "",
         symbol_index: SymbolIndex | None = None, lookup_budget: int = DEFAULT_LOOKUP_BUDGET,
-        on_lookup=None) -> str:
+        on_lookup=None, protocol_mode: str = "marker") -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
     prompt = FIX_PROMPT.format(
         fid=task["id"], ident=_ident(task["id"]),
@@ -1076,7 +1168,13 @@ def fix(client: LocalClient, task: dict, previous: str, error: str,
         source=source, scaffold=scaffold_field, example=example or "(none)",
         files=files or "(none)", callable=callable_api or "(none)",
     )
-    return _generate_with_lookups(
+    if protocol_mode == "marker":
+        prompt += _LOOKUP_MARKER_SUFFIX
+        return _generate_with_lookups(
+            client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
+            symbol_index, lookup_budget, on_lookup,
+        )
+    return _generate_with_tool_calls(
         client, prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
         symbol_index, lookup_budget, on_lookup,
     )
@@ -1126,6 +1224,13 @@ def main() -> None:
                          "contracts/lookup-protocol.md). 0 disables the lookup protocol entirely.")
     ap.add_argument("--no-symbol-index", action="store_true",
                     help="disable the AST-backed SymbolIndex (and thus the lookup protocol) entirely")
+    ap.add_argument("--lookup-protocol", choices=["auto", "tool", "marker"], default="auto",
+                    help="which agentic lookup protocol to use (feature 008, "
+                         "contracts/protocol-selection.md): auto (detect via /api/tags "
+                         "capabilities — the default), tool (force native Ollama tool-calling, "
+                         "erroring clearly if the model doesn't support it), marker (force spec "
+                         "007's LOOKUP: text-marker protocol regardless of capability, for "
+                         "comparison/debugging)")
     args = ap.parse_args()
 
     fork_rpc = None
@@ -1172,6 +1277,11 @@ def main() -> None:
     if not client.ready():
         log({"event": "abort", "reason": f"local model {args.model} not ready"})
         sys.exit(1)
+
+    # Protocol Mode (feature 008): decided once per run, never re-evaluated
+    # mid-run or per-attempt (research.md R4 — no mid-run downgrade).
+    protocol_mode, protocol_source = _select_protocol(args.lookup_protocol, client)
+    log({"event": "lookup_protocol", "mode": protocol_mode, "source": protocol_source})
 
     # ── Step 1: model builds its own task list from the report ───────────────
     log({"event": "extract_start", "report": str(args.report), "model": args.model})
@@ -1259,7 +1369,7 @@ def main() -> None:
 
         try:
             code = draft(client, task, args.project, scaffold, example, file_map, callable_api,
-                        symbol_index, args.lookup_budget, _log_lookup(0))
+                        symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode)
         except ModelUnavailableError as e:
             log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
             continue
@@ -1383,7 +1493,7 @@ def main() -> None:
                 code = fix(client, task, code,
                            test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
                            args.project, scaffold, example, file_map, callable_api,
-                           symbol_index, args.lookup_budget, _log_lookup(attempt))
+                           symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode)
             except ModelUnavailableError as e:
                 log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
                 outcome = "fix_failed"
