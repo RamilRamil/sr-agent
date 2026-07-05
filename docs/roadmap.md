@@ -92,46 +92,66 @@ Gotchas the human has confirmed reproducible — seed entries for Phase 5's stor
 ## Current focus (2026-07)
 Phase 4 (kernel↔pack boundary) and Phase 5 (operator frontend) have both landed. Two open threads:
 
-**PoC-writing workability — MILESTONE reached (2026-07-05).** The local model, driven
-by `scripts/poc_queue_runner.py`, composes its own finding list from an external report
-(no prefiltering) and drafts a PoC per finding. It exercises the write_poc→run_tests
-path against real contracts in the `--network none` sandbox. Two **orthogonal axes**
-had to be closed to get a PoC to compile, and each was closed by a distinct lever:
+**PoC-writing workability — substantial progress, honestly re-verified (2026-07-05).**
+The local model, driven by `scripts/poc_queue_runner.py`, composes its own finding list
+from an external report (no prefiltering) and drafts a PoC per finding, exercising the
+write_poc→run_tests path against real contracts in a Docker sandbox. Two **orthogonal
+axes** had to be closed to get a PoC anywhere near compiling, each by a distinct lever:
 
 1. **Signature/identifier precision** — the model invents "natural" names/methods
    (`IUnstakeCooldown`, `requestUnstake`) even when the real ones are in a source block.
-   Closed by *authoritative grounding + deterministic repair*, in this order of impact:
-   honest git-tracked-only source → transitive dep interfaces → a **file map** (every real
-   contract/interface + import path) → **callable_api** (the exact function signatures of
-   the finding's contracts) → **compiler-error-driven targeted repair** (resolve each forge
-   error against those signatures/paths). Plus deterministic guards for mechanical errors
-   (non-virtual `setUp` override → 4334; wrong import depth; bare SPDX line).
-2. **Scaffold coverage** — the PoC can only use contracts the test base actually deploys.
-   The contest's own base (`StrataProtocolDeploymentBase`) deploys cdo/tranches/unstake but
-   NOT sharesCooldown, so sharesCooldown findings can't compile against it. Closed by
+   Closed by *authoritative grounding + deterministic repair*: honest git-tracked-only
+   source → transitive dep interfaces → a **file map** (every real contract/interface +
+   import path) → **callable_api** (real function signatures, later extended with
+   explicit **CALLER REQUIREMENT** annotations for access-control modifiers) →
+   **compiler-error-driven targeted repair** + **line-level signature hints** (resolve
+   each forge error, including argument-type errors, against real signatures) + **stall
+   detection** (escalate when a fix repeats the identical error/FAIL reason). Plus
+   deterministic guards for mechanical errors (non-virtual `setUp` override → 4334;
+   wrong import depth; bare SPDX line).
+2. **Scaffold coverage** — the PoC can only use contracts the test base actually
+   deploys. The contest's own base (`StrataProtocolDeploymentBase`) deploys
+   cdo/tranches/unstake but NOT sharesCooldown. Closed (in **production mode** —
+   generated/own infra is an accepted input here, unlike the honest-experiment mode) by
    inheriting a **complete deploy base** (operator-provided `--test-scaffold`) + a real
    worked **few-shot example** whose setup pattern the model copies.
 
-**Result:** with both axes closed (32b + complete base + full grounding), **all 3 sampled
-findings compiled on the first attempt** as structurally-real PoCs (`compiled_real`, gate
-passed — real base inheritance, real interfaces, real signatures, active assertions, no
-mocks). The invention problem is gone (H-02 used the real `transfer(...)`, not the invented
-`requestUnstake`).
+**Correction to an earlier claim in this doc:** an initial pass reported "all 3 sampled
+findings compiled" — **this was a false positive.** The compile-success detector
+(`_compiled()`) was a *denylist* (`"Compiler run failed" not in output`); a genuine
+compile failure worded differently (`Error: Encountered invalid solc version ...`,
+caused by `docker/Dockerfile.foundry` baking solc for `src/` but not `test/`, so the
+scaffold's own pinned `solidity 0.8.28` was never cached) slipped past it, and all 3
+"successes" were actually silent compile failures. Both are now fixed (positive-signal
+detector: `Ran \d+ tests?`; Dockerfile bakes `test/` too) — see
+[specs/006-eval-verification-robustness](../specs/006-eval-verification-robustness/)
+and [docs/eval-principles.md](eval-principles.md) for the general lesson and the audit
+of every other check in this harness for the same failure mode.
 
-**Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from ONLY
-the target's original code?") — answered: it produces sophisticated near-compiling PoCs
-even honestly; (b) the *production tool* ("auto-generate compiling PoCs") — the operator
-supplies a complete deploy base (generated/own infra is fine here, it stands in for the
-operator's harness) and the tool delivers.
+**Path B (mainnet-fork execution) is now real and has produced genuine signal.** With
+the detector fixed and `--fork` (network + `MAINNET_RPC_URL`) enabled, a
+compiled-but-reverted PoC is no longer silently accepted as success (fork mode requires
+an actual `passed` verdict). Focused runs on the hardest finding (H-01, SharesCooldown —
+honestly deep-testing the fix cycle, not yet reproducing the bug) **did reach genuine
+fork execution** (several attempts compiled and ran against real mainnet state) —
+a first — but did not converge to a passing PoC within budget. Root-caused a further
+grounding gap in the process: `callable_api` shows function signatures but never expands
+the **fields of struct types** referenced in them (e.g. `TCancelGuard`, `TBalanceState`),
+so the model invents plausible-sounding field names for structs it can't see inside of.
+This is the motivating gap for **spec 007** (AST-backed grounding + an agentic
+lookup protocol), which generalizes the fix instead of adding another one-off regex.
 
-**Open gap → correctness.** `compiled` ≠ *correctly reproduces the bug*: a PoC can compile
-with real APIs yet muddle the mechanism (observed: H-02 deploys but doesn't use
-`UnstakeCooldown`, operates on `sharesCooldown` instead). The structural gate can't judge
-this. The only objective correctness check is **path B — run against a mainnet fork**
-(`MAINNET_RPC_URL` + network in the sandbox): a green `forge` run means the revert/exploit
-actually triggers. That, plus tighter model reasoning about the specific mechanism, is the
-remaining work toward *useful* (not just compiling) PoCs. See [project_poc_vacuous_pass]
-memory. Infra gotchas #3–#11 below were all found on this thread.
+**Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from
+ONLY the target's original code?") — answered: it produces sophisticated
+near-compiling PoCs even honestly; (b) the *production tool* ("auto-generate compiling,
+correct PoCs") — not yet reached; this is the active thread.
+
+**Open gap → correctness.** `compiled` ≠ *correctly reproduces the bug*: a PoC can
+compile with real APIs yet muddle the mechanism (observed: an early H-02 draft deployed
+`UnstakeCooldown` but called `sharesCooldown`'s version of a shared-interface method
+instead). The structural gate can't judge this — path B (a real fork run) is the
+objective check, and is now wired in. See [project_poc_vacuous_pass] memory. Infra
+gotchas #3–#11 below were all found on this thread.
 
 **(optional) Frontend remainder** — the 6 deferred Phase-5 tasks (US4 provenance, US3 audit trail, T031 docker run-through) — see Phase 5.
 

@@ -19,6 +19,9 @@ The project is deliberately split into two separable things (see spec 004):
   agent core. The reusable part; the research contribution. Knows nothing about auditing.
 - **[The audit agent](docs/audit-agent.md)** — the first *capability pack*, which plugs
   the kernel into smart-contract auditing. Task-specific; lives under `sr_agent/packs/audit/`.
+- **[Eval/verification principles](docs/eval-principles.md)** — how this project checks
+  whether an automated verdict over a generated artifact (a compiled PoC, a passing
+  test) is actually true, not a silent false positive.
 
 The kernel enforces the guarantees; the pack contributes the capability and can never
 weaken one. Everything below describes the audit pack riding on the kernel.
