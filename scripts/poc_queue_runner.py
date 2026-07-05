@@ -1157,19 +1157,24 @@ def main() -> None:
                      "hints": revert_note[:300]})
             # Stall detection: the SAME error surviving into the next attempt means the
             # previous fix didn't even try to address it — escalate rather than
-            # silently repeat the same hint. Covers BOTH compile errors (code + line)
-            # and runtime FAIL reasons (observed 2026-07-05, H-01: attempts 4 and 5 both
-            # forge-executed and hit the identical `[FAIL: ERC20InvalidApprover(0x0)]`
-            # with no new guidance in between — a genuine EVM-logic stall, not a compile
-            # one, which the compile-only signature below didn't catch).
-            error_sig = tuple(sorted(re.findall(
-                r"Error \((\d+)\)[\s\S]{0,200}?-->[^\n]*?:(\d+):", test.stdout + test.stderr)))
+            # silently repeat the same hint. Covers BOTH compile errors and runtime FAIL
+            # reasons. Keyed on error CODE + MESSAGE TEXT, not line number: a model that
+            # rewrites the whole file between attempts shifts every line number even
+            # while repeating the identical semantic mistake (confirmed 2026-07-05,
+            # qwen3-coder:30b, H-01: the exact same "Named argument validUntil"/"Member
+            # shares not found" pair persisted across all 6 attempts, but the line-keyed
+            # signature only coincidentally matched twice — a false negative on 4 of 5
+            # real stalls, because the errors moved from lines 53/63 to 48/59 and back).
+            error_sig = tuple(sorted(re.findall(r"Error \(\d+\): ([^\n]+)", test.stdout + test.stderr)))
             fail_sig = tuple(sorted(re.findall(r"\[FAIL:?\.?\s*([^\]]*)\]", test.stdout + test.stderr)))
             stall_note = ""
             if error_sig and error_sig == prev_error_sig:
-                stall_note = ("\n\nSTALL: the previous fix did NOT resolve this — the identical error is still "
-                             "at the same line. Do not repeat the same edit; re-read the targeted fix above and "
-                             "change the actual argument types/order/names, not just formatting.")
+                stall_note = (
+                    f"\n\nSTALL: the previous fix did NOT resolve this — the IDENTICAL compiler error(s) persist "
+                    f"even after a full rewrite: {'; '.join(error_sig)[:300]}. Do not just rewrite the file again; "
+                    "specifically locate every call/argument the targeted fix above describes and correct it — "
+                    "if you already tried a similar edit, it was wrong in a way you haven't identified yet."
+                )
                 log({"event": "stall_detected", "finding_id": fid, "attempt": attempt, "kind": "compile"})
             elif fail_sig and fail_sig == prev_fail_sig:
                 stall_note = (
