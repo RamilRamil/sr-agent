@@ -1092,29 +1092,58 @@ LOOKUP_TOOL_SCHEMA = {
 }
 
 
-_RAW_TOOL_CALL_RE = re.compile(r"<function=(\w+)>(.*?)(?:</function>|$)", re.DOTALL)
+_RAW_FUNCTION_TAG_RE = re.compile(r"<function=(\w+)>(.*?)(?:</function>|$)", re.DOTALL)
+_RAW_TOOL_CALL_WRAPPER_RE = re.compile(r"<tool_call>(.*?)(?:</tool_call>|$)", re.DOTALL)
+# Belt-and-suspenders: strip any ORPHAN tag marker too (no matching pair) — live
+# H-01 run 2026-07-06 leaked a bare `</tool_call>` as line 1 with no opening tag
+# anywhere in that turn's content (the model's earlier turns had already made
+# real structured tool calls via message.tool_calls; only this stray closing
+# marker leaked into its final code-writing turn).
+_TOOL_SCAFFOLD_MARKER_RE = re.compile(r"</?function(?:=\w+)?>|</?tool_call>", re.IGNORECASE)
+
+
+def _extract_name_arg(body: str) -> dict:
+    try:
+        return json.loads(body.strip())
+    except (json.JSONDecodeError, ValueError):
+        m = re.search(r'"name"\s*:\s*"([^"]+)"', body) or re.search(r"([A-Za-z_]\w+)", body)
+        return {"name": m.group(1)} if m else {}
 
 
 def _parse_raw_tool_call_text(content: str) -> list[dict]:
     """Some Qwen-family builds occasionally write a function call as literal
-    TEXT (`<function=lookup_symbol>{"name": "X"}</function>`) instead of
-    populating Ollama's structured `message.tool_calls` — observed live
-    2026-07-05 on the real `qwen3-coder:30b` H-01 attempt 1: it leaked
-    `<function=lookup_symbol>` as line 1 of the written PoC file, breaking
-    compilation (`Error (7858): Expected pragma, import directive...`). Parse
-    this as a real (if malformed) tool call rather than letting it reach the
-    PoC file as garbage source."""
+    TEXT instead of populating Ollama's structured `message.tool_calls` — in
+    (at least) two different conventions, both observed live against the real
+    `qwen3-coder:30b` build on H-01: `<function=lookup_symbol>{"name":
+    "X"}</function>` (2026-07-05, leaked as line 1, breaking compilation with
+    `Error 7858: Expected pragma...`) and the generic Hermes/Qwen
+    `<tool_call>{"name": "lookup_symbol", "arguments": {...}}</tool_call>`
+    wrapper (2026-07-06, same failure shape). Parse either as a real (if
+    malformed) tool call rather than letting it reach the PoC file as garbage
+    source."""
     calls = []
-    for name, body in _RAW_TOOL_CALL_RE.findall(content):
-        args: dict = {}
+    for name, body in _RAW_FUNCTION_TAG_RE.findall(content):
+        calls.append({"function": {"name": name, "arguments": _extract_name_arg(body)}})
+    for body in _RAW_TOOL_CALL_WRAPPER_RE.findall(content):
         try:
-            args = json.loads(body.strip())
+            obj = json.loads(body.strip())
         except (json.JSONDecodeError, ValueError):
-            m = re.search(r'"name"\s*:\s*"([^"]+)"', body) or re.search(r"([A-Za-z_]\w+)", body)
-            if m:
-                args = {"name": m.group(1)}
-        calls.append({"function": {"name": name, "arguments": args}})
+            continue
+        name = obj.get("name", "") if isinstance(obj, dict) else ""
+        if name:
+            args = obj.get("arguments") or obj.get("parameters") or {}
+            calls.append({"function": {"name": name, "arguments": args}})
     return calls
+
+
+def _strip_tool_scaffolding(content: str) -> str:
+    """Remove any tool-call text scaffolding before it can reach a PoC file
+    (FR-007) — full `<function=...>...</function>`/`<tool_call>...</tool_call>`
+    blocks (body included, since the body is JSON/args, never real code), THEN
+    any remaining orphan tag marker with no matching pair."""
+    content = _RAW_FUNCTION_TAG_RE.sub("", content)
+    content = _RAW_TOOL_CALL_WRAPPER_RE.sub("", content)
+    return _TOOL_SCAFFOLD_MARKER_RE.sub("", content)
 
 
 def _generate_with_tool_calls(
@@ -1141,7 +1170,7 @@ def _generate_with_tool_calls(
             # FR-007: never let a raw <function=...> fragment reach the PoC
             # file even when the round-trip is ending (budget exhausted, or a
             # malformed call couldn't be parsed at all).
-            return _strip_fences(_RAW_TOOL_CALL_RE.sub("", content))
+            return _strip_fences(_strip_tool_scaffolding(content))
         to_resolve = calls[: budget - used]
         # Only attach tool_calls to the replayed assistant turn when Ollama
         # itself produced them — for the raw-text fallback, `content` already
