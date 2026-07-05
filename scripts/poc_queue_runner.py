@@ -484,6 +484,41 @@ def build_file_manifest(project: Path) -> str:
 CALLABLE_API_BUDGET = 6000
 _FUNC_SIG_RE = re.compile(r"function\s+\w+\s*\([^{};]*\)[^{};]*", re.S)
 
+# Keywords that appear after a function's parameter list but are NOT access-control
+# modifiers — everything else there is a real modifier invocation (onlyUser(user),
+# onlyOwner, nonReentrant, ...), i.e. exactly a CALLER requirement.
+_SIG_TAIL_KEYWORDS = {"external", "public", "internal", "private", "view", "pure",
+                     "payable", "virtual", "override", "returns", "memory", "calldata", "storage"}
+_MODIFIER_TOKEN_RE = re.compile(r"\b([A-Za-z_]\w*)(\([^)]*\))?")
+
+
+def _param_list_end(sig: str) -> int:
+    """Index just past the function's parameter list's matching ')'."""
+    start = sig.index("(")
+    depth = 0
+    for i in range(start, len(sig)):
+        if sig[i] == "(":
+            depth += 1
+        elif sig[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(sig)
+
+
+def _sig_modifiers(sig: str) -> list[str]:
+    """Custom modifier invocations on a function signature (e.g. `onlyUser(user)`,
+    `nonReentrant`) — these ARE the caller/precondition requirements a PoC must
+    satisfy, but they sit at the tail of a long raw signature line where a model can
+    have them in context and still not apply them (observed 2026-07-05: the model had
+    `onlyUser(user)` available and still called `cancel(...)` from the wrong address,
+    raising `InvalidCaller`). Surfacing them as a separate, loud line — not just
+    leaving them buried in the signature — is the fix."""
+    tail = sig[_param_list_end(sig):]
+    tail = tail.split("returns")[0].split(";")[0]
+    return [name + (args or "") for name, args in _MODIFIER_TOKEN_RE.findall(tail)
+            if name not in _SIG_TAIL_KEYWORDS]
+
 
 def build_callable_api(project: Path, location: str) -> str:
     """The exact external/public function SIGNATURES of the finding's target
@@ -507,8 +542,22 @@ def build_callable_api(project: Path, location: str) -> str:
         sigs = []
         for mo in _FUNC_SIG_RE.finditer(txt):
             sig = re.sub(r"\s+", " ", mo.group(0)).strip()
-            if "external" in sig or "public" in sig:
-                sigs.append(sig + ";")
+            if "external" not in sig and "public" not in sig:
+                continue
+            sig = sig + ";"
+            sigs.append(sig)
+            mods = _sig_modifiers(sig)
+            if mods:
+                fname_m = re.match(r"function\s+(\w+)", sig)
+                fname = fname_m.group(1) if fname_m else "?"
+                # Name the function explicitly — two different functions can share
+                # the exact same modifier (e.g. both `onlyUser(user)`), and without a
+                # name the two annotation lines are byte-identical; a naive dedup
+                # (dict.fromkeys) would then silently drop the second one, exactly the
+                # function whose caller requirement most needed to survive.
+                sigs.append(f"    ⚠ CALLER REQUIREMENT on `{fname}(...)` above: "
+                           f"{', '.join(mods)} — vm.prank/startPrank the required "
+                           f"address BEFORE calling it, or it reverts.")
         if sigs:
             body = "\n".join(dict.fromkeys(sigs))[:budget]
             budget -= len(body)
