@@ -162,8 +162,40 @@ not converge to a passing H-01 PoC within budget (`EXHAUSTED` after 221s, same
 outcome class as pre-lookup runs) — the deliverable proven here is that the
 lookup protocol activates on a real, previously-undiscovered failure mode and that
 the fix generalizes (any future qualified-name query now resolves), not a solved
-H-01. A follow-up run with the fix applied would be needed to see whether
-resolved lookups change H-01's outcome; not yet run (Kaggle GPU quota).
+H-01. **Follow-up runs (2026-07-05, same session) confirm the fix helped, then surface
+the next distinct gap — recorded honestly, not chased further this round.** Two
+more live `--only H-01 --fork --lookup-budget 3` runs:
+- **Run 2** (qualified-name fix only): all lookups now resolved (`TExitUpperBounds`,
+  `TExitParams`, `TRequest` — previously all `matches=0`), but the model still wrote
+  an invalid `import { TExitParams } from ".../ISharesCooldown.sol";` for a struct
+  declared *inside* that interface — a nested type isn't a top-level declaration,
+  so this is invalid Solidity. All 3 attempts died on this one compile error.
+  Fixed: `_render_lookup_response()` now adds an explicit NOTE for struct/enum
+  matches with a non-empty `contract`, telling the model to import the container
+  and reference `Contract.Name` instead
+  ([scripts/poc_queue_runner.py](../scripts/poc_queue_runner.py)).
+- **Run 3** (with that NOTE): attempt 1 hit the same import mistake once (against a
+  different wrong file), but **attempt 2 got past it entirely** — genuine forward
+  progress, not a repeat of the same stall. It then hit a *new, later-stage* error:
+  `Member "setVaultExitBounds" not found ... in contract ERC20Cooldown`.
+  Verified: `setVaultExitBounds` is a **real function**, but declared on
+  `SharesCooldown`, not `ERC20Cooldown` — sibling contracts, both inherit
+  `CooldownBase`, no relation to each other. The model called a real method on the
+  **wrong deployed contract instance**. This is a different failure class from
+  identifier/field invention — it's the "which instance" confusion already flagged
+  as `mechanism_signal`'s known limitation — and is **out of spec 007's declared
+  scope** (spec 007 targets invented identifiers, not instance selection). Attempts
+  2 and 3 repeated this identical error; run exhausted (161.5s), quarantined.
+
+**Honest conclusion for spec 007 (FR-007/SC-003):** the AST-grounded lookup +
+qualified-name fallback + nested-type-import guidance measurably advanced H-01's
+draft past two full compile-error classes it was previously stuck on, in the same
+number of attempts (3) per run. H-01 itself still has not converged to a passing
+PoC — the remaining blocker (wrong-instance method calls) is a distinct,
+out-of-scope problem for a future iteration, not a lookup-mechanism gap. Three
+Kaggle GPU sessions were spent on this validation thread; stopping here rather than
+continuing to patch new gaps one-by-one, per the spec's own explicit stance that
+convergence is not a completion condition.
 
 **Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from
 ONLY the target's original code?") — answered: it produces sophisticated
