@@ -197,6 +197,32 @@ Kaggle GPU sessions were spent on this validation thread; stopping here rather t
 continuing to patch new gaps one-by-one, per the spec's own explicit stance that
 convergence is not a completion condition.
 
+**T020 done (2026-07-05, offline, no live model needed):** `build_file_manifest`/
+`build_callable_api` re-platformed onto `SymbolIndex` (grammar-accurate, not regex),
+falling back to the old regex scan under `--no-symbol-index`. Verified against the
+real target: the AST path surfaces every real interface a multi-interface file
+bundles under one misleading filename (e.g. `Interfaces.sol` hid `IAavePool`,
+`IERC20Cooldown`, `IEulerVault` behind one filename entry) — a known trade-off, the
+~4 files that fail to parse now drop out of the manifest entirely rather than
+showing a possibly-wrong filename guess (same shape as research.md R8 elsewhere).
+
+**Separately found and fixed while validating T020 against the real H-01 location
+(not a T020 regression — reproduced byte-for-byte by the old regex path too):**
+`build_callable_api` gave the WHOLE 6000-char budget to names in `location`
+first-come-first-served. On `StrataCDO.coverage / ... + SharesCooldown.cancel`,
+`StrataCDO`'s own signatures + dependency chain exhausted the entire budget before
+`SharesCooldown` — the actual finding target — ever got a turn, so `cancel()`'s
+`onlyUser(user)` CALLER REQUIREMENT never reached the model in any of the 3 live
+runs above. Fixed in two parts: each name now gets its own budget share, and within
+a file's share a function explicitly named in `location` (e.g. `cancel`) is
+rendered first — needed because `cancel` is declared 3rd of 3 external functions in
+`SharesCooldown.sol`, so per-name fairness alone still let it get truncated out.
+This may well have been a real, silent contributor to H-01's non-convergence above:
+the model was never shown the exact caller requirement for the function the
+finding is about. Not yet re-validated live (would need a 4th Kaggle session);
+5 new offline tests (`tests/unit/test_poc_queue_runner.py`) pin both fixes against
+a synthetic fixture reproducing the exact failure shape.
+
 **Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from
 ONLY the target's original code?") — answered: it produces sophisticated
 near-compiling PoCs even honestly; (b) the *production tool* ("auto-generate compiling,
