@@ -1,0 +1,202 @@
+"""AST-backed Solidity symbol index (feature 007).
+
+Replaces `scripts/poc_queue_runner.py`'s regex-based extraction (a hand-rolled
+function-signature regex, a hand-rolled modifier extractor, ad-hoc file-name
+matching) with a real parse of the target project's grammar, via the
+`solidity-parser` package (ANTLR4-based; see specs/007-ast-grounded-poc-drafting/
+research.md R1 for why this library over tree-sitter-solidity).
+
+Walks the RAW parse tree (not `solidity_parser.parser.objectify`, whose
+`FunctionObject` wrapper drops modifier information — verified empirically against
+this project's real `SharesCooldown.cancel`, research.md's own validation) so every
+`Symbol.definition` — a struct's fields, a function's full signature AND its real
+access-control modifiers, an enum's values — is grammar-correct, never guessed.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from solidity_parser import parser as _sol_parser
+
+logger = logging.getLogger(__name__)
+
+_SYMBOL_KINDS = ("contract", "interface", "struct", "enum", "function", "modifier", "state_var")
+
+
+@dataclass(frozen=True)
+class Symbol:
+    """A named Solidity construct discovered by parsing the target project.
+
+    `definition` is always derived from the parsed AST, never hand-assembled from a
+    text pattern — this is what makes it trustworthy as ground truth (spec 007 FR-002).
+    """
+    name: str
+    kind: str                    # one of _SYMBOL_KINDS
+    contract: str                # containing contract/interface name ("" for top-level)
+    file: Path
+    definition: str              # the real, complete rendering
+    modifiers: tuple[str, ...] = field(default_factory=tuple)  # only for kind == "function"
+
+
+def _type_str(type_node: dict | None) -> str:
+    """Render a parameter/field's typeName node back to Solidity source text.
+    Falls back to a raw repr for any node shape not explicitly handled — never
+    raises, since an unusual type must not take down the whole index build (R8)."""
+    if type_node is None:
+        return "?"
+    t = type_node.get("type")
+    if t == "ElementaryTypeName":
+        return type_node.get("name", "?")
+    if t == "UserDefinedTypeName":
+        return type_node.get("namePath", "?")
+    if t == "ArrayTypeName":
+        base = _type_str(type_node.get("baseTypeName"))
+        length = type_node.get("length")
+        return f"{base}[{length if length is not None else ''}]"
+    if t == "Mapping":
+        key = _type_str(type_node.get("keyType"))
+        val = _type_str(type_node.get("valueType"))
+        return f"mapping({key} => {val})"
+    return str(type_node.get("name") or type_node.get("namePath") or t or "?")
+
+
+def _param_str(p: dict) -> str:
+    parts = [_type_str(p.get("typeName"))]
+    if p.get("storageLocation"):
+        parts.append(p["storageLocation"])
+    if p.get("name"):
+        parts.append(p["name"])
+    return " ".join(parts)
+
+
+def _params_str(param_list: dict | None) -> str:
+    if not param_list:
+        return ""
+    return ", ".join(_param_str(p) for p in param_list.get("parameters", []))
+
+
+def _render_function(fn: dict) -> tuple[str, tuple[str, ...]]:
+    """(definition text, modifier invocation strings) for a raw FunctionDefinition node."""
+    name = fn.get("name") or ("constructor" if fn.get("isConstructor") else "<fallback/receive>")
+    params = _params_str(fn.get("parameters"))
+    tail: list[str] = []
+    if fn.get("visibility"):
+        tail.append(fn["visibility"])
+    if fn.get("stateMutability"):
+        tail.append(fn["stateMutability"])
+    mods: list[str] = []
+    for m in fn.get("modifiers") or []:
+        mname = m.get("name", "?")
+        margs = m.get("arguments") or []
+        if margs:
+            arg_strs = [a.get("name") or a.get("number") or _type_str(a) for a in margs]
+            mods.append(f"{mname}({', '.join(str(a) for a in arg_strs)})")
+        else:
+            mods.append(mname)
+    tail.extend(mods)
+    ret = _params_str(fn.get("returnParameters"))
+    sig = f"function {name}({params}) {' '.join(tail)}".rstrip()
+    if ret:
+        sig += f" returns ({ret})"
+    return sig + ";", tuple(mods)
+
+
+def _render_struct(node: dict) -> str:
+    lines = [f"struct {node.get('name', '?')} {{"]
+    for m in node.get("members", []):
+        lines.append(f"    {_type_str(m.get('typeName'))} {m.get('name', '?')};")
+    lines.append("}")
+    return "\n".join(lines)
+
+
+def _render_enum(node: dict) -> str:
+    values = [m.get("name", "?") for m in node.get("members", [])]
+    return f"enum {node.get('name', '?')} {{ {', '.join(values)} }}"
+
+
+def _render_state_var(node: dict) -> str:
+    parts = []
+    for v in node.get("variables", []):
+        vis = v.get("visibility")
+        bits = [_type_str(v.get("typeName"))]
+        if vis and vis != "default":
+            bits.append(vis)
+        bits.append(v.get("name", "?"))
+        parts.append(" ".join(bits) + ";")
+    return "\n".join(parts)
+
+
+class SymbolIndex:
+    """Queryable index of every named Solidity construct in a target project.
+
+    Built once per harness run (data-model.md). `lookup(name)` returns every real
+    match — never guesses a single "best" one under ambiguity (research.md R3): the
+    same name can legitimately appear in more than one contract, or as overloaded
+    functions.
+    """
+
+    def __init__(self) -> None:
+        self._symbols: dict[str, list[Symbol]] = {}
+        self.unparsed_files: list[Path] = []
+
+    def lookup(self, name: str) -> list[Symbol]:
+        return list(self._symbols.get(name, []))
+
+    def _add(self, sym: Symbol) -> None:
+        self._symbols.setdefault(sym.name, []).append(sym)
+
+    def _index_contract(self, contract_node: dict, file: Path) -> None:
+        cname = contract_node.get("name", "?")
+        kind = contract_node.get("kind", "contract")
+        self._add(Symbol(cname, kind if kind in ("contract", "interface", "library") else "contract",
+                         "", file, f"{kind} {cname}"))
+        for sub in contract_node.get("subNodes", []):
+            t = sub.get("type")
+            try:
+                if t == "FunctionDefinition" and sub.get("name"):
+                    definition, mods = _render_function(sub)
+                    self._add(Symbol(sub["name"], "function", cname, file, definition, mods))
+                elif t == "StructDefinition":
+                    self._add(Symbol(sub.get("name", "?"), "struct", cname, file, _render_struct(sub)))
+                elif t == "EnumDefinition":
+                    self._add(Symbol(sub.get("name", "?"), "enum", cname, file, _render_enum(sub)))
+                elif t == "ModifierDefinition" and sub.get("name"):
+                    params = _params_str(sub.get("parameters"))
+                    self._add(Symbol(sub["name"], "modifier", cname, file,
+                                     f"modifier {sub['name']}({params})"))
+                elif t == "StateVariableDeclaration":
+                    text = _render_state_var(sub)
+                    for v in sub.get("variables", []):
+                        if v.get("name"):
+                            self._add(Symbol(v["name"], "state_var", cname, file, text))
+            except Exception:
+                # A single malformed declaration must not take down the whole file's
+                # index (R8) — every other symbol in this contract still gets indexed.
+                logger.debug("solidity_index: could not render %s in %s (%s)",
+                            t, cname, file, exc_info=True)
+
+    def _index_file(self, path: Path) -> None:
+        ast = _sol_parser.parse_file(str(path))
+        for child in ast.get("children", []):
+            if child.get("type") == "ContractDefinition":
+                self._index_contract(child, path)
+
+    @classmethod
+    def build(cls, project_root: Path) -> "SymbolIndex":
+        """Parse every .sol file under `project_root`. A file that fails to parse is
+        skipped and recorded in `unparsed_files` — building never raises for a single
+        bad file (research.md R8); a genuinely broken SymbolIndex itself (a bug, not a
+        normal degraded state) is the only thing that should propagate."""
+        idx = cls()
+        skip_dirs = {"out", "cache_forge", "node_modules", "lib", "artifacts"}
+        for path in sorted(project_root.rglob("*.sol")):
+            if skip_dirs & set(path.relative_to(project_root).parts):
+                continue
+            try:
+                idx._index_file(path)
+            except Exception as e:
+                idx.unparsed_files.append(path)
+                logger.debug("solidity_index: failed to parse %s (%s)", path, e)
+        return idx

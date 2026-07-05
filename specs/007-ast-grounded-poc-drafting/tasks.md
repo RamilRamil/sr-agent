@@ -23,7 +23,7 @@ share one Foundational phase (the `SymbolIndex` itself), since every story queri
 
 ## Phase 1: Setup
 
-- [ ] T001 Add `solidity-parser` as a documented harness dependency (e.g.
+- [X] T001 Add `solidity-parser` as a documented harness dependency (e.g.
   `scripts/requirements.txt`, or a docstring-documented `pip install` step in
   `scripts/poc_queue_runner.py`) — per research.md R5, NOT `sr_agent`'s core
   `pyproject.toml`. Verify `.venv/bin/pip install solidity-parser` succeeds and pulls
@@ -37,16 +37,16 @@ share one Foundational phase (the `SymbolIndex` itself), since every story queri
 
 **⚠️ CRITICAL**: blocks all user stories — every story queries `SymbolIndex`.
 
-- [ ] T002 Create `scripts/solidity_index.py` with the `Symbol` dataclass (name, kind,
+- [X] T002 Create `scripts/solidity_index.py` with the `Symbol` dataclass (name, kind,
   contract, file, definition, modifiers) per data-model.md.
-- [ ] T003 Implement `SymbolIndex.build(project_root: Path)` in
+- [X] T003 Implement `SymbolIndex.build(project_root: Path)` in
   `scripts/solidity_index.py` — parse every `.sol` file via `solidity_parser.parser`,
   catching and recording per-file parse failures in `unparsed_files` rather than
   raising (research.md R8; contracts/symbol-index-query.md's failure-modes table).
-- [ ] T004 Implement `SymbolIndex.lookup(name: str) -> list[Symbol]` in
+- [X] T004 Implement `SymbolIndex.lookup(name: str) -> list[Symbol]` in
   `scripts/solidity_index.py` — exact-name match across all parsed files, returning
   EVERY match (never guesses a single one under ambiguity — research.md R3).
-- [ ] T005 [P] Implement per-kind `Symbol.definition` rendering in
+- [X] T005 [P] Implement per-kind `Symbol.definition` rendering in
   `scripts/solidity_index.py`: struct → every field+type; function → full signature +
   every real modifier invocation; enum → every value; state variable → declared
   type+visibility (contracts/symbol-index-query.md).
@@ -66,25 +66,25 @@ source; a nonexistent symbol resolves to `[]`, never fabricated.
 
 ### Tests for User Story 1
 
-- [ ] T006 [P] [US1] `tests/unit/test_solidity_index.py::test_struct_fields_real` —
+- [X] T006 [P] [US1] `tests/unit/test_solidity_index.py::test_struct_fields_real` —
   `SymbolIndex.build(<real target fixture>).lookup("TBalanceState")` returns the real
   fields (`pending, claimable, nextUnlockAt, nextUnlockAmount, totalRequests`) and
   does NOT contain an invented `shares` field (quickstart.md #1).
-- [ ] T007 [P] [US1] `tests/unit/test_solidity_index.py::test_not_found_never_fabricated`
+- [X] T007 [P] [US1] `tests/unit/test_solidity_index.py::test_not_found_never_fabricated`
   — `lookup("TotallyMadeUpStructName")` returns `[]` (FR-008/SC-005).
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Implement lookup-request detection in `scripts/poc_queue_runner.py`
+- [X] T008 [US1] Implement lookup-request detection in `scripts/poc_queue_runner.py`
   (a `LOOKUP: <name>` line-matching function) per
   contracts/lookup-protocol.md — depends on T004.
-- [ ] T009 [US1] Wire the bounded lookup round-trip into `draft()`/`fix()` in
+- [X] T009 [US1] Wire the bounded lookup round-trip into `draft()`/`fix()` in
   `scripts/poc_queue_runner.py`: on detecting one or more `LOOKUP:` lines (up to the
   remaining budget), resolve each via `SymbolIndex.lookup()`, render the `[DATA]`
   response per contracts/lookup-protocol.md, re-prompt, and only accept the model's
   output as final once no `LOOKUP:` lines remain OR the budget is exhausted (depends
   on T008).
-- [ ] T010 [US1] Add `--lookup-budget` CLI flag (default 3) to
+- [X] T010 [US1] Add `--lookup-budget` CLI flag (default 3) to
   `scripts/poc_queue_runner.py`'s `main()`, and log every lookup as its own
   `{"event": "lookup", "finding_id", "attempt", "symbol", "resolved", "match_count"}`
   entry (FR-004/SC-004; data-model.md's Lookup Request/Lookup Budget).
@@ -106,15 +106,15 @@ the identical `lookup()`/round-trip code path already built in US1.
 
 ### Tests for User Story 2
 
-- [ ] T011 [P] [US2] `tests/unit/test_solidity_index.py::test_function_signature_and_modifiers`
+- [X] T011 [P] [US2] `tests/unit/test_solidity_index.py::test_function_signature_and_modifiers`
   — `lookup("cancel")` resolves with its full signature AND its real
   `onlyUser(user)` modifier captured in `Symbol.modifiers`.
-- [ ] T012 [P] [US2] `tests/unit/test_solidity_index.py::test_enum_values` — lookup of
+- [X] T012 [P] [US2] `tests/unit/test_solidity_index.py::test_enum_values` — lookup of
   a real enum in the target project resolves with every declared value.
 
 ### Implementation for User Story 2
 
-- [ ] T013 [US2] No new protocol/round-trip code should be required for T011/T012 to
+- [X] T013 [US2] No new protocol/round-trip code should be required for T011/T012 to
   pass — if any IS required, that is itself a signal the round-trip built in US1 was
   accidentally kind-specific; fix `scripts/poc_queue_runner.py`'s lookup handling to
   be kind-agnostic (depends on T008-T010 from US1, T005 from Foundational).
@@ -136,18 +136,18 @@ set are BOTH retrievable by name.
 
 ### Tests for User Story 3
 
-- [ ] T014 [P] [US3] `tests/unit/test_solidity_index.py::test_shared_modifier_no_collision`
+- [X] T014 [P] [US3] `tests/unit/test_solidity_index.py::test_shared_modifier_no_collision`
   — two real functions in the target project sharing the exact same modifier(s) each
   resolve correctly and independently via `lookup()` on their own names (SC-002; the
   exact bug class from this session's regex-based `callable_api` annotation collision).
-- [ ] T015 [P] [US3] `tests/unit/test_solidity_index.py::test_unparseable_file_degrades_gracefully`
+- [X] T015 [P] [US3] `tests/unit/test_solidity_index.py::test_unparseable_file_degrades_gracefully`
   — a directory containing one malformed/unsupported `.sol` file still builds a
   usable index for the OTHER files; the bad file appears in `unparsed_files`, build()
   does not raise (FR-009/research.md R8).
 
 ### Implementation for User Story 3
 
-- [ ] T016 [US3] If T014/T015 reveal any gap in T003's per-file error handling or T004's
+- [X] T016 [US3] If T014/T015 reveal any gap in T003's per-file error handling or T004's
   per-name lookup (e.g. an index keyed in a way that only stores one Symbol per name),
   fix `scripts/solidity_index.py` so lookups are always name→list, never name→single
   (depends on T003, T004).
@@ -186,7 +186,7 @@ whether H-01 converges.
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T019 [P] Confirm existing static grounding (file map, callable_api, scaffold,
+- [X] T019 [P] Confirm existing static grounding (file map, callable_api, scaffold,
   few-shot example) is unaffected — re-run this session's earlier offline validations
   for those blocks (FR-005; quickstart.md #5).
 - [ ] T020 (optional, explicitly secondary per research.md R6) Re-platform
