@@ -1034,6 +1034,7 @@ def main() -> None:
         outcome = "unknown"
         res = None
         prev_error_sig: tuple | None = None
+        prev_fail_sig: tuple | None = None
         for attempt in range(1, args.attempts + 1):
             res = write_poc(fid, poc_dir, generator=lambda _f, c=code: c)
             rel = str(res.path.relative_to(args.project))
@@ -1105,20 +1106,34 @@ def main() -> None:
             elif revert_note.strip():
                 log({"event": "revert_hints", "finding_id": fid, "attempt": attempt,
                      "hints": revert_note[:300]})
-            # Stall detection: the SAME error (code + line) surviving into the next
-            # attempt means the previous fix didn't even try to address it — escalate
-            # rather than silently repeat the same hint (observed 2026-07-05, H-01: 3
-            # consecutive attempts hit the identical "invalid implicit conversion" at
-            # the same line with no new guidance in between).
+            # Stall detection: the SAME error surviving into the next attempt means the
+            # previous fix didn't even try to address it — escalate rather than
+            # silently repeat the same hint. Covers BOTH compile errors (code + line)
+            # and runtime FAIL reasons (observed 2026-07-05, H-01: attempts 4 and 5 both
+            # forge-executed and hit the identical `[FAIL: ERC20InvalidApprover(0x0)]`
+            # with no new guidance in between — a genuine EVM-logic stall, not a compile
+            # one, which the compile-only signature below didn't catch).
             error_sig = tuple(sorted(re.findall(
                 r"Error \((\d+)\)[\s\S]{0,200}?-->[^\n]*?:(\d+):", test.stdout + test.stderr)))
+            fail_sig = tuple(sorted(re.findall(r"\[FAIL:?\.?\s*([^\]]*)\]", test.stdout + test.stderr)))
             stall_note = ""
             if error_sig and error_sig == prev_error_sig:
                 stall_note = ("\n\nSTALL: the previous fix did NOT resolve this — the identical error is still "
                              "at the same line. Do not repeat the same edit; re-read the targeted fix above and "
                              "change the actual argument types/order/names, not just formatting.")
-                log({"event": "stall_detected", "finding_id": fid, "attempt": attempt})
-            prev_error_sig = error_sig
+                log({"event": "stall_detected", "finding_id": fid, "attempt": attempt, "kind": "compile"})
+            elif fail_sig and fail_sig == prev_fail_sig:
+                stall_note = (
+                    f"\n\nSTALL: the previous fix did NOT change the runtime outcome — the test still fails with "
+                    f"the EXACT SAME reason: {'; '.join(fail_sig)}. This is an EVM-logic stall, not a syntax one. "
+                    "Reconsider WHO calls each step (vm.prank/startPrank target), WHETHER a precondition "
+                    "(approval, balance, role, initial state) is actually established before the call that fails, "
+                    "and whether the call ORDER matches the finding's described sequence — do not just reformat "
+                    "the same call chain."
+                )
+                log({"event": "stall_detected", "finding_id": fid, "attempt": attempt, "kind": "runtime",
+                     "reason": fail_sig[:2]})
+            prev_error_sig, prev_fail_sig = error_sig, fail_sig
             try:
                 code = fix(client, task, code,
                            test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
