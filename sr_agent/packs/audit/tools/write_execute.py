@@ -111,6 +111,7 @@ def run_tests(
     image: str = FOUNDRY_IMAGE,
     timeout_s: float = 180.0,
     foundry_test_dir: str | None = None,
+    fork_rpc: str | None = None,
 ) -> TestResult:
     """Run `forge test` inside the network-isolated sandbox.
 
@@ -138,7 +139,13 @@ def run_tests(
     A Foundry image used with this sandbox MUST have its target project's solc
     version(s) pre-baked (see docker/Dockerfile.foundry) or every run fails.
     """
-    inner = "forge test --offline"
+    # `fork_rpc` (opt-in, standalone workability harness ONLY) runs the PoC against a
+    # mainnet fork so a green result means the exploit actually triggered — the only
+    # objective correctness check. It requires network + the RPC url in the container,
+    # so it drops `--offline` and enables egress. The secure agent NEVER passes this;
+    # its default stays --offline + --network none.
+    forking = bool(fork_rpc)
+    inner = "forge test" if forking else "forge test --offline"
     if test_path:
         inner += f" --match-path {test_path}"
     if foundry_test_dir:
@@ -146,10 +153,13 @@ def run_tests(
     command = [inner]
 
     # The project workspace is mounted rw so forge can write build artifacts;
-    # isolation comes from --network none + ephemeral container + dropped caps.
+    # isolation comes from --network none + ephemeral container + dropped caps
+    # (relaxed to `bridge` only for an explicit fork run).
     mounts = [Mount(host_path=project_dir, container_path="/work", read_only=False)]
     result = sandbox.run(
-        image, command, mounts=mounts, workdir="/work", timeout_s=timeout_s
+        image, command, mounts=mounts, workdir="/work", timeout_s=timeout_s,
+        network="bridge" if forking else "none",
+        env={"MAINNET_RPC_URL": fork_rpc} if forking else None,
     )
     return TestResult(
         passed=result.ok,

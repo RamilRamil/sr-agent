@@ -795,7 +795,18 @@ def main() -> None:
     ap.add_argument("--require-pass", action="store_true",
                     help="only count a green forge run as success; default (path A) also accepts a PoC that "
                          "COMPILES and is structurally real (execution needs a mainnet fork we don't run offline).")
+    ap.add_argument("--fork", action="store_true",
+                    help="PATH B: run each PoC against a mainnet fork (needs env MAINNET_RPC_URL + local network). "
+                         "A green forge run then means the exploit ACTUALLY triggers — the real correctness check. "
+                         "Relaxes the sandbox to network=bridge for the run (standalone harness only).")
     args = ap.parse_args()
+
+    fork_rpc = None
+    if args.fork:
+        fork_rpc = os.environ.get("MAINNET_RPC_URL")
+        if not fork_rpc:
+            print("--fork requires env MAINNET_RPC_URL (a mainnet archive RPC, e.g. Alchemy)", file=sys.stderr)
+            sys.exit(2)
 
     poc_dir = args.project / POC_SUBDIR
     log_file = poc_dir / "_runner_progress.jsonl"
@@ -914,7 +925,9 @@ def main() -> None:
             try:
                 test = run_tests(
                     args.project, sandbox, test_path=rel,
-                    foundry_test_dir=POC_SUBDIR, timeout_s=RUN_TIMEOUT_S,
+                    foundry_test_dir=POC_SUBDIR,
+                    timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
+                    fork_rpc=fork_rpc,
                     **run_kwargs,
                 )
             except SandboxUnavailable as e:

@@ -35,7 +35,7 @@ class FakeSandbox:
     def __init__(self, exit_code: int = 0):
         self._exit = exit_code
 
-    def run(self, image, command, mounts=None, timeout_s=None, network="none", workdir=None):
+    def run(self, image, command, mounts=None, timeout_s=None, network="none", workdir=None, env=None):
         return SandboxResult(exit_code=self._exit, stdout="[PASS] test_exploit()", stderr="")
 
 
