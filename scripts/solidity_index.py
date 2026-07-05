@@ -142,7 +142,16 @@ class SymbolIndex:
         self.unparsed_files: list[Path] = []
 
     def lookup(self, name: str) -> list[Symbol]:
-        return list(self._symbols.get(name, []))
+        """Exact match on `name`; if that misses and `name` is a `Contract.Symbol`
+        qualified reference, fall back to the bare suffix (live H-01 run,
+        2026-07-05: the model asked for `ISharesCooldown.TCancelGuard` and got a
+        false not-found even though `TCancelGuard` genuinely exists in the index
+        under its bare name — the index is keyed on bare names throughout)."""
+        matches = list(self._symbols.get(name, []))
+        if not matches and "." in name:
+            bare = name.rsplit(".", 1)[-1]
+            matches = list(self._symbols.get(bare, []))
+        return matches
 
     def _add(self, sym: Symbol) -> None:
         self._symbols.setdefault(sym.name, []).append(sym)

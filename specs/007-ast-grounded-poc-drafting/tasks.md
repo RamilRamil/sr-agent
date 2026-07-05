@@ -166,12 +166,12 @@ requirement that H-01 now passes.
 **Independent Test**: quickstart.md #4 — a live run against H-01 with the lookup
 mechanism enabled, with lookups visible in the run log.
 
-- [ ] T017 [US4] Run `scripts/poc_queue_runner.py --only H-01 --fork --lookup-budget 3`
+- [X] T017 [US4] Run `scripts/poc_queue_runner.py --only H-01 --fork --lookup-budget 3`
   (fresh Kaggle-hosted local model tunnel + `MAINNET_RPC_URL`, same setup as this
   session's other fork runs) per quickstart.md #4. Depends on Phase 3 (US1) being
   complete; Phase 4/5 improve robustness but are not blocking for this run to be
   attempted.
-- [ ] T018 [US4] Record the outcome in `docs/roadmap.md`'s PoC-workability section
+- [X] T018 [US4] Record the outcome in `docs/roadmap.md`'s PoC-workability section
   (FR-007/SC-003): whether/which lookups were issued and resolved, and how the
   attempt-by-attempt error signature compares to this session's already-logged
   pre-lookup H-01 runs — honestly, whether or not H-01 ultimately passes (per

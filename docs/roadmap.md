@@ -141,6 +141,30 @@ so the model invents plausible-sounding field names for structs it can't see ins
 This is the motivating gap for **spec 007** (AST-backed grounding + an agentic
 lookup protocol), which generalizes the fix instead of adding another one-off regex.
 
+**Spec 007 live validation against H-01 (2026-07-05) — honest result: mechanism
+fired, gap found and fixed, H-01 still not converged.** With
+[specs/007-ast-grounded-poc-drafting](../specs/007-ast-grounded-poc-drafting/)'s
+`SymbolIndex` + bounded `LOOKUP:` protocol wired into `draft()`/`fix()`, a
+`--only H-01 --fork --lookup-budget 3` run produced the **first live use of the
+lookup mechanism**: on a compile stall (attempts a3/a4), the model spontaneously
+emitted `LOOKUP: ISharesCooldown.TCancelGuard`, `LOOKUP: ISharesCooldown.TExitParams`,
+`LOOKUP: ISharesCooldown.TExitUpperBounds` — exactly the struct-field-blindness gap
+spec 007 was built to close. All three resolved `resolved=False, matches=0`, which
+looked at first like the mechanism doing nothing. Direct verification against the
+real target project showed all three symbols **do exist** under their bare names
+(1 match each) — the model queried in a qualified `Contract.Symbol` form that
+`SymbolIndex.lookup()` (keyed on bare names only) didn't yet normalize. Fixed:
+`lookup()` now falls back to the bare suffix when a qualified query misses
+([scripts/solidity_index.py](../scripts/solidity_index.py), regression test
+`test_qualified_name_falls_back_to_bare`). Recorded honestly per FR-007/SC-003 and
+[[project_poc_vacuous_pass]]'s no-overclaiming discipline: the run itself still did
+not converge to a passing H-01 PoC within budget (`EXHAUSTED` after 221s, same
+outcome class as pre-lookup runs) — the deliverable proven here is that the
+lookup protocol activates on a real, previously-undiscovered failure mode and that
+the fix generalizes (any future qualified-name query now resolves), not a solved
+H-01. A follow-up run with the fix applied would be needed to see whether
+resolved lookups change H-01's outcome; not yet run (Kaggle GPU quota).
+
 **Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from
 ONLY the target's original code?") — answered: it produces sophisticated
 near-compiling PoCs even honestly; (b) the *production tool* ("auto-generate compiling,
