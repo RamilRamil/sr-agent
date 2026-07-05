@@ -181,11 +181,11 @@ observable on the real finding spec 007 already tested" — NOT a requirement.
 
 **Independent Test**: quickstart.md #6.
 
-- [ ] T017 [US4] (OPTIONAL — not required for feature completion, FR-009) Run
+- [X] T017 [US4] (OPTIONAL — not required for feature completion, FR-009) Run
   `scripts/poc_queue_runner.py --only H-01 --fork --lookup-protocol auto` against
   a fresh Kaggle tunnel + `qwen3-coder:30b`. Depends on Phase 3/4/5 (US1–US3)
   being complete.
-- [ ] T018 [US4] (OPTIONAL, only if T017 is run) Record the honest comparison
+- [X] T018 [US4] (OPTIONAL, only if T017 is run) Record the honest comparison
   against spec 007's already-documented H-01 baseline in `docs/roadmap.md` —
   "no observable difference" is an acceptable, valid outcome (this feature
   changes transport, not resolution logic).

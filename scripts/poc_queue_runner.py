@@ -296,15 +296,39 @@ def _location_methods(location: str) -> list[str]:
             if m not in _LOC_METHOD_STOPWORDS]
 
 
-def mechanism_signal(code: str, location: str) -> dict:
+# A finding's DESCRIPTION prose names its real mechanism in markdown code
+# spans — `coverage()`, `cancel()` — a much higher-precision candidate source
+# than loose word-extraction over full sentences (which pulls in ordinary
+# English words like "before"/"which"/"meant" alongside the real method names).
+_DESC_BACKTICK_METHOD_RE = re.compile(r"`([A-Za-z_]\w*)\(\)?`")
+
+
+def _description_methods(description: str) -> list[str]:
+    backticked = list(dict.fromkeys(_DESC_BACKTICK_METHOD_RE.findall(description)))
+    if backticked:
+        return backticked
+    return _location_methods(description)  # loose fallback if no code spans at all
+
+
+def mechanism_signal(code: str, location: str, description: str = "") -> dict:
     """DIAGNOSTIC ONLY (not gated — a location-derived heuristic is too noisy to
     safely block on; see the 2026-07-05 lesson on trusting a single heuristic).
     Reports whether the finding's own function name(s) are actually CALLED in the
     PoC body, not just a contract deployed — a compiling PoC can still exploit the
     wrong function/contract (observed: H-02 deployed UnstakeCooldown but called
     sharesCooldown.transfer instead). Read this signal, don't gate on it alone —
-    verify with path B / a human/independent-model read for anything that matters."""
-    methods = _location_methods(location)
+    verify with path B / a human/independent-model read for anything that matters.
+
+    Candidates come from BOTH `location` and `description` (root-caused
+    2026-07-06): extraction is non-deterministic and `location` can degrade to a
+    bare filename (`SharesCooldown.sol`, no method names) on one run even when a
+    richer location (`StrataCDO.coverage / calculateExitMode +
+    SharesCooldown.cancel`) was extracted for the IDENTICAL finding on another —
+    silently blinding this diagnostic exactly when it matters, e.g. a PoC named
+    `testRevertWhenRequestRedeemWithZeroShares` reached a real fork PASS with
+    zero structural defects while never calling `coverage()`/`cancel()`, the
+    actual mechanism the finding's own DESCRIPTION names."""
+    methods = list(dict.fromkeys(_location_methods(location) + _description_methods(description)))
     if not methods:
         return {"checked": [], "called": []}
     body = _strip_comments(code)
@@ -1534,7 +1558,7 @@ def main() -> None:
             # DIAGNOSTIC ONLY, never gates outcome: does the PoC call the finding's
             # own function, or just deploy the right contract and exploit something
             # else? A location-derived heuristic is too noisy to safely block on.
-            mech = mechanism_signal(code, task["location"])
+            mech = mechanism_signal(code, task["location"], task["description"])
             log({
                 "event": "tested", "finding_id": fid, "attempt": attempt,
                 "passed": test.passed, "compiled": compiled, "real_pass": real_pass,

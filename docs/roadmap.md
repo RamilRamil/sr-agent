@@ -249,12 +249,55 @@ implementations kept in sync by hand — verified in
 (T017/T018, explicitly optional per FR-009) was NOT run this session — three
 Kaggle GPU sessions were already spent validating spec 007's mechanism, and this
 feature's own completion bar is the offline suite above, not a new live claim.
-An attempted direct empirical re-verification of the raw `/api/chat` response
-shape against the project's own local, CPU-only `ollama` Docker container was
-abandoned after ~6 minutes with no response — a re-confirmation of gotcha #4
-below (CPU-only 7b generation not viable on this hardware), not a new finding;
-the request/response contract itself is Ollama's stable, documented API, not
-something genuinely in question.
+**What remains genuinely unverified**: whether the real Kaggle-hosted
+`qwen3-coder:30b` build actually emits a structured `tool_calls` object during
+live drafting, rather than writing the call as plain text despite the schema —
+only a live run (T017/T018) can answer this. A local CPU-only probe CANNOT
+substitute for that check even in principle (gotcha #4 below: local CPU-only
+Ollama is not viable for interactive generation on this hardware at all, for
+`/api/chat` same as `/api/generate`) — do not re-attempt one.
+
+**T017/T018 done live (2026-07-06): native tool-calling confirmed working on
+the real model, twice reaching genuine fork execution — AND a new, real
+vacuous-pass gap found and fixed.** A live `--only H-01 --fork
+--lookup-protocol tool` run against the real Kaggle-hosted `qwen3-coder:30b`
+confirmed `message.tool_calls` genuinely fires (dozens of real symbol lookups
+resolved across several runs: `ISharesCooldown`, `SharesCooldown`, `TRequest`,
+`TExitParams`, `COOLDOWN_WORKER_ROLE`, …) — the open question from spec 008's
+own research.md R3 is answered: yes, on real drafting turns, not just
+scripted tests. Two real-text-leak formats were found and fixed live
+(`<function=name>` then the Hermes/Qwen `<tool_call>` wrapper — see gotcha
+#12 below). H-01 reached genuine `compiled_real: true` fork execution TWICE
+across separate runs (once with `[FAIL: EvmError: Revert]` on the actual
+exploit assertion, once — see below — with a structurally-clean `PASS` that
+turned out to be a false positive).
+
+**The false positive, found by actually reading the code, not the log
+line:** one run reported `outcome: "passed", real_pass: true,
+compiled_real: true, defects: []` — the first `real_pass: true` on H-01 all
+session. Reading the actual PoC (`audit/poc/H_01.t.sol`) showed why this is
+NOT a win: the model wrote `testRevertWhenRequestRedeemWithZeroShares()` — a
+generic "does requestRedeem revert on zero shares" sanity check, with
+**zero relation** to H-01's actual mechanism (same-block silo padding
+shifting `coverage()` to self-select the exit tier, then reclaiming padding
+via `cancel()`). The structural gate (`_poc_defects`) correctly found no
+defects (real import, real assertion, no mock) because the test IS honest —
+it's just not testing the right thing. `mechanism_signal()`'s own diagnostic
+returned `{"checked": [], "called": []}` — silently useless — because that
+run's non-deterministic extraction gave `location: "SharesCooldown.sol"` (a
+bare filename, no method names), even though the identical finding's
+`description` still explicitly named `coverage()`/`cancel()` in markdown code
+spans. Fixed: `mechanism_signal()` now also derives candidates from
+`description` via a precision-first backtick-code-span extractor
+(`` `coverage()` `` → `coverage`, falling back to loose word-extraction only
+if no code spans exist) — re-run against the false-positive PoC:
+`{"checked": ["coverage", "cancel"], "called": []}`, correctly flagging it as
+suspicious. Still diagnostic-only (not gated — same noise-risk rationale as
+before), but no longer silently blind when location degrades. 2 new offline
+tests, 266/266 full suite. **Honest status: H-01 has NOT actually passed** —
+this session's best evidence remains "reaches real fork execution, exploit
+assertion doesn't yet trigger the described bug," now with a corrected,
+harder-to-fool diagnostic for next time.
 
 **Two frames, kept distinct:** (a) the honest *experiment* ("can the model do it from
 ONLY the target's original code?") — answered: it produces sophisticated
