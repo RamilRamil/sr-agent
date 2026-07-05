@@ -260,6 +260,36 @@ def _location_names(location: str) -> list[str]:
     return list(dict.fromkeys(
         (t[:-4] if t.endswith(".sol") else t) for t in _LOC_NAME_RE.findall(location)
     ))
+
+
+# lowercase-starting identifiers in the location are candidate METHOD names
+# (e.g. "UnstakeCooldown.transfer" -> "transfer"); a tiny stopword list filters
+# out connective English words the model's free-text location may contain.
+_LOC_METHOD_RE = re.compile(r"\b[a-z][A-Za-z0-9]{3,}\b")
+_LOC_METHOD_STOPWORDS = {"this", "with", "from", "into", "when", "that", "path", "line"}
+
+
+def _location_methods(location: str) -> list[str]:
+    return [m for m in dict.fromkeys(_LOC_METHOD_RE.findall(location))
+            if m not in _LOC_METHOD_STOPWORDS]
+
+
+def mechanism_signal(code: str, location: str) -> dict:
+    """DIAGNOSTIC ONLY (not gated — a location-derived heuristic is too noisy to
+    safely block on; see the 2026-07-05 lesson on trusting a single heuristic).
+    Reports whether the finding's own function name(s) are actually CALLED in the
+    PoC body, not just a contract deployed — a compiling PoC can still exploit the
+    wrong function/contract (observed: H-02 deployed UnstakeCooldown but called
+    sharesCooldown.transfer instead). Read this signal, don't gate on it alone —
+    verify with path B / a human/independent-model read for anything that matters."""
+    methods = _location_methods(location)
+    if not methods:
+        return {"checked": [], "called": []}
+    body = _strip_comments(code)
+    called = [m for m in methods if re.search(rf"\.{re.escape(m)}\s*\(", body)]
+    return {"checked": methods, "called": called}
+
+
 SOURCE_CHAR_BUDGET = 26000  # target + transitive dep interfaces; within num_ctx w/ output room
 PRIMARY_CHAR_CAP = 10000    # cap each target file so its dep interfaces are never starved
 IMPORT_DEPTH = 2            # follow local imports 2 levels: base contracts (access-control,
@@ -669,12 +699,21 @@ def _poc_defects(code: str, target_stems: list[str], scaffold_used: bool = False
     return defects
 
 
+_RAN_TEST_RE = re.compile(r"Ran \d+ tests?")
+
+
 def _compiled(stdout: str, stderr: str) -> bool:
     """Did the PoC COMPILE (path-A success bar)? A runtime revert (no mainnet fork
-    offline) is NOT a compile failure — distinguish 'Compiler run failed' from a
-    test that built but reverted."""
-    blob = stdout + "\n" + stderr
-    return "Compiler run failed" not in blob and "Compilation failed" not in blob
+    offline) is NOT a compile failure — distinguish a build failure from a test that
+    built but reverted.
+
+    POSITIVE signal, not a denylist: forge prints "Ran N test(s) for ..." only after
+    it successfully compiled and actually executed the suite — whether the test then
+    passed, failed, or reverted. A denylist of known failure strings (the previous
+    approach) is fragile: it silently misclassified `Error: Encountered invalid solc
+    version ...` (a real compile failure with a different message) as "compiled",
+    which produced a false "all 3 compiled" result (2026-07-05) that this fixes."""
+    return bool(_RAN_TEST_RE.search(stdout + "\n" + stderr))
 
 
 def _sigs_for(callable_api: str, contract: str) -> str:
@@ -944,10 +983,14 @@ def main() -> None:
             compiled = _compiled(test.stdout, test.stderr)
             real_pass = test.passed and not defects
             compiled_real = compiled and not defects   # path-A bar: builds + structurally real
+            # DIAGNOSTIC ONLY, never gates outcome: does the PoC call the finding's
+            # own function, or just deploy the right contract and exploit something
+            # else? A location-derived heuristic is too noisy to safely block on.
+            mech = mechanism_signal(code, task["location"])
             log({
                 "event": "tested", "finding_id": fid, "attempt": attempt,
                 "passed": test.passed, "compiled": compiled, "real_pass": real_pass,
-                "compiled_real": compiled_real, "defects": defects,
+                "compiled_real": compiled_real, "defects": defects, "mechanism": mech,
                 "exit_code": test.exit_code,
                 "stdout_tail": test.stdout[-1200:], "stderr_tail": test.stderr[-1200:],
             })
