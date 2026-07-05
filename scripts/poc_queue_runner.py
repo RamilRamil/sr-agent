@@ -539,6 +539,36 @@ def read_scaffold(project: Path, paths: list[Path]) -> str:
     return "\n\n".join(blocks)
 
 
+# A state-variable declaration's TYPE, e.g. `SharesCooldown internal sharesCooldown;`
+# captures `SharesCooldown` — used to check whether a scaffold actually PROVIDES an
+# instance of a contract type a finding needs, not just whether the scaffold text
+# happens to mention that name somewhere (e.g. in an import or a comment).
+_STATE_VAR_TYPE_RE = re.compile(r"\b([A-Z]\w*)\s+(?:internal|public|private)\s+\w+\s*;")
+
+
+def scaffold_missing_types(scaffold: str, target_stems: list[str]) -> list[str]:
+    """Which of the finding's target contract names have NO state-variable
+    declaration of that type anywhere in the resolved scaffold — i.e. the
+    scaffold structurally cannot deploy/provide them, so no draft/fix attempt
+    can succeed no matter how well-grounded the model's identifiers are.
+
+    Root-caused 2026-07-06: the auto-discovered scaffold
+    (`StrataProtocolDeploymentBase`) deploys `ERC20Cooldown` but declares no
+    `SharesCooldown` at all — H-01 needs `SharesCooldown`-specific behavior
+    (`cancel()` with `TCancelGuard`, `setVaultExitBounds`). The model correctly
+    wrote `sharesCooldown.cancel(...)` (matching a DIFFERENT, purpose-built
+    scaffold's naming convention it must have seen in training or a few-shot
+    example) but nothing in THIS scaffold ever declares that variable — six
+    live attempts were spent before this was noticed by hand. DIAGNOSTIC ONLY
+    (logged, not gating): a false positive here (e.g. the finding names an
+    interface that legitimately has no state variable) must not block a run
+    that could otherwise succeed."""
+    if not scaffold or not target_stems:
+        return []
+    declared_types = set(_STATE_VAR_TYPE_RE.findall(scaffold))
+    return [s for s in target_stems if s not in declared_types]
+
+
 # ── File map: an authoritative index of every REAL contract/interface + path ──
 FILEMAP_CHAR_BUDGET = 10000
 
@@ -1536,6 +1566,15 @@ def main() -> None:
              "scaffold": [str(p.relative_to(args.project)) for p in scaffold_paths],
              "example": str(example_path.relative_to(args.project)) if example_path else None,
              "callable_api_chars": len(callable_api), "setup_guard": guard})
+
+        missing_types = scaffold_missing_types(scaffold, target_stems)
+        if missing_types:
+            log({"event": "scaffold_insufficient", "finding_id": fid,
+                 "missing_types": missing_types,
+                 "hint": "the resolved scaffold declares no state variable of "
+                         "this type — no attempt can deploy/use it as-is; "
+                         "point --test-scaffold at a base that does (diagnostic "
+                         "only, does not block this run)"})
 
         def _log_lookup(attempt_no: int):
             def _cb(symbol: str, resolved: bool, match_count: int) -> None:
