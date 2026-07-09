@@ -52,21 +52,20 @@ the assistant's message (including its `tool_calls`) followed by one `{"role":
 chat request.
 
 **Rationale**: This is Ollama's stable, documented tool-calling contract (in use
-by Ollama's own function-calling examples and every downstream client library).
-Direct empirical re-verification against a live local model was ATTEMPTED this
-session (a `qwen2.5-coder:7b` chat-with-tools call against the project's own
-local, CPU-only `ollama` Docker container) but abandoned after ~6 minutes with no
-response — this is a re-confirmation of the project's own already-documented
-gotcha #4 (`docs/roadmap.md`: "Local CPU-only Ollama... is not viable for 7b
-interactive work on modest hardware... a single generate call exceeded 30 minutes
-and was still incomplete"), not a new finding. Given that gotcha, spending
-Kaggle-hosted GPU budget purely to re-verify a well-documented, stable API
-contract (rather than to validate this feature's actual logic, which is entirely
-testable offline against a scripted response) was judged not worth the cost — the
-request/response SHAPE itself is not in question; only whether the ACTUAL
-qwen3-coder:30b build reliably emits `tool_calls` instead of writing the call as
-plain text is a genuine open question, deferred to optional live validation
-(User Story 4 / FR-009) rather than blocking this plan.
+by Ollama's own function-calling examples and every downstream client library) —
+the request/response SHAPE itself is not in question. Empirically re-verifying it
+against a live model is NOT attempted locally: `docs/roadmap.md` gotcha #4 already
+established that CPU-only local Ollama is not viable for interactive generation on
+this hardware (a single call exceeded 30 minutes and was still incomplete) — this
+applies to any `/api/chat` call, not only `/api/generate`, so a local probe is a
+known dead end here, not worth retrying. What genuinely remains open — and is NOT
+something a local CPU probe could answer even if it were viable — is whether the
+ACTUAL Kaggle-hosted `qwen3-coder:30b` build reliably emits `tool_calls` as a real
+structured object during live PoC drafting, instead of writing the call as plain
+text despite the schema being declared. That question is deferred to optional
+live validation (User Story 4 / FR-009, needing the Kaggle GPU tunnel this session
+already used for spec 007's runs) rather than blocking this plan or being answered
+by more local attempts.
 
 **Alternatives considered**: OpenAI-compatible `/v1/chat/completions` (Ollama also
 exposes this) — rejected; `/api/chat` is Ollama's native endpoint and is what
