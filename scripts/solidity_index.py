@@ -143,7 +143,31 @@ class SymbolIndex:
     def __init__(self) -> None:
         self._symbols: dict[str, list[Symbol]] = {}
         self._by_file: dict[Path, list[Symbol]] = {}
+        # Inheritance + declared state-variable TYPES per contract (feature 009 US3):
+        # lets a caller resolve "does this contract, or any of its ancestors, hold an
+        # instance of type X?" — the cross-file inheritance a single-file regex is
+        # blind to. `_bases[C]` = C's direct base-contract names; `_svtypes[C]` = the
+        # types C declares directly as state variables.
+        self._bases: dict[str, tuple[str, ...]] = {}
+        self._svtypes: dict[str, set[str]] = {}
         self.unparsed_files: list[Path] = []
+
+    def provides_state_var_type(self, contract: str, type_name: str) -> bool:
+        """Does `contract` — or any contract in its transitive inheritance chain —
+        declare a state variable of type `type_name`? Grammar-correct and
+        cross-file (feature 009 US3), unlike a single-file regex. Unknown
+        contracts (not indexed) contribute nothing; cycles are guarded."""
+        seen: set[str] = set()
+        stack = [contract]
+        while stack:
+            c = stack.pop()
+            if c in seen:
+                continue
+            seen.add(c)
+            if type_name in self._svtypes.get(c, ()):
+                return True
+            stack.extend(self._bases.get(c, ()))
+        return False
 
     def lookup(self, name: str) -> list[Symbol]:
         """Exact match on `name`; if that misses and `name` is a `Contract.Symbol`
@@ -181,6 +205,15 @@ class SymbolIndex:
         kind = contract_node.get("kind", "contract")
         self._add(Symbol(cname, kind if kind in ("contract", "interface", "library") else "contract",
                          "", file, f"{kind} {cname}"))
+        # Inheritance chain (feature 009 US3): base-contract names for later
+        # transitive state-var-type resolution.
+        bases = tuple(
+            b.get("baseName", {}).get("namePath")
+            for b in contract_node.get("baseContracts", [])
+            if b.get("baseName", {}).get("namePath")
+        )
+        if bases:
+            self._bases[cname] = bases
         for sub in contract_node.get("subNodes", []):
             t = sub.get("type")
             try:
@@ -200,6 +233,7 @@ class SymbolIndex:
                     for v in sub.get("variables", []):
                         if v.get("name"):
                             self._add(Symbol(v["name"], "state_var", cname, file, text))
+                            self._svtypes.setdefault(cname, set()).add(_type_str(v.get("typeName")))
             except Exception:
                 # A single malformed declaration must not take down the whole file's
                 # index (R8) — every other symbol in this contract still gets indexed.
@@ -211,6 +245,28 @@ class SymbolIndex:
         for child in ast.get("children", []):
             if child.get("type") == "ContractDefinition":
                 self._index_contract(child, path)
+
+    def contract_names(self) -> list[str]:
+        """Every contract/interface/library name in the index (feature 009 US3)."""
+        return [s.name for s in self.top_level_symbols()]
+
+    @classmethod
+    def build_from_source(cls, source: str) -> "SymbolIndex":
+        """Index a single Solidity source STRING (feature 009 US3) — for checking a
+        scaffold's own declarations/inheritance without a file on disk. Never raises
+        on a parse failure; returns whatever indexed (possibly empty)."""
+        idx = cls()
+        try:
+            ast = _sol_parser.parse(source)
+        except Exception:
+            return idx
+        for child in ast.get("children", []):
+            if child.get("type") == "ContractDefinition":
+                try:
+                    idx._index_contract(child, Path("<source>"))
+                except Exception:
+                    continue
+        return idx
 
     @classmethod
     def build(cls, project_root: Path) -> "SymbolIndex":

@@ -311,6 +311,31 @@ instead). The structural gate can't judge this — path B (a real fork run) is t
 objective check, and is now wired in. See [project_poc_vacuous_pass] memory. Infra
 gotchas #3–#11 below were all found on this thread.
 
+**Harness review + remediation (2026-07-06, step 1 landed).** A structured
+code-review of the standalone PoC harness (`scripts/poc_queue_runner.py`, ~1750
+lines) surfaced that its verdict-producing gates — the functions deciding
+pass/fail/compiled/vacuous/stall — had **zero direct tests**, the exact place a bug
+becomes a false milestone (spec 006 traces to a `_compiled` denylist bug caught only
+in a live run), and that `main()`'s whole draft→run→fix loop had **no integration
+test** (every bug this session surfaced only in a metered GPU run). Step 1 —
+[specs/009-harness-verdict-tests](../specs/009-harness-verdict-tests/) — closes that:
+direct offline tests for every verdict gate + deterministic repair helper (a
+re-broken denylist `_compiled` now fails a test, SC-001); the per-finding loop
+extracted (behavior-preserving) into `_process_finding` and driven end-to-end by an
+offline fake-model + fake-sandbox integration test covering the five outcome paths
+(`tests/integration/test_poc_runner_loop.py`) — loop-bug detection moved off Kaggle
+onto local seconds; and `scaffold_missing_types` re-platformed onto an
+inheritance-aware `SymbolIndex` (a state var provided via an inherited parent base is
+no longer false-flagged as missing — the last regex-fragility class from the 007/008
+arc). **Remaining review findings, deferred to their own specs** (ranked): (2)
+automated independent PASS verification — mutation-style "would the assertion fail if
+the described bug were patched?" turning `mechanism_signal` from a heuristic into a
+real correctness gate (the deepest "do we trust a green run" question); (3) Stage 1
+large-model scaffold synthesis (write the deploy-base when `scaffold_missing_types`
+flags it, instead of a human hand-writing `PashovSharesCooldownBase`); (4) the 84
+`datetime.utcnow()` deprecation warnings and more architecture invariants (harness
+doesn't bypass sandbox; SourceType hierarchy) — low-grade cleanup.
+
 **(optional) Frontend remainder** — the 6 deferred Phase-5 tasks (US4 provenance, US3 audit trail, T031 docker run-through) — see Phase 5.
 
 ## Open questions (deferred, not blocking)

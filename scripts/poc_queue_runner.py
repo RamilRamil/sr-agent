@@ -546,27 +546,49 @@ def read_scaffold(project: Path, paths: list[Path]) -> str:
 _STATE_VAR_TYPE_RE = re.compile(r"\b([A-Z]\w*)\s+(?:internal|public|private)\s+\w+\s*;")
 
 
-def scaffold_missing_types(scaffold: str, target_stems: list[str]) -> list[str]:
+def scaffold_missing_types(scaffold: str, target_stems: list[str],
+                           symbol_index: SymbolIndex | None = None) -> list[str]:
     """Which of the finding's target contract names have NO state-variable
-    declaration of that type anywhere in the resolved scaffold — i.e. the
-    scaffold structurally cannot deploy/provide them, so no draft/fix attempt
-    can succeed no matter how well-grounded the model's identifiers are.
+    declaration of that type anywhere in the resolved scaffold OR its inherited
+    parent bases — i.e. the scaffold structurally cannot deploy/provide them, so no
+    draft/fix attempt can succeed no matter how well-grounded the model's
+    identifiers are.
 
     Root-caused 2026-07-06: the auto-discovered scaffold
     (`StrataProtocolDeploymentBase`) deploys `ERC20Cooldown` but declares no
     `SharesCooldown` at all — H-01 needs `SharesCooldown`-specific behavior
-    (`cancel()` with `TCancelGuard`, `setVaultExitBounds`). The model correctly
-    wrote `sharesCooldown.cancel(...)` (matching a DIFFERENT, purpose-built
-    scaffold's naming convention it must have seen in training or a few-shot
-    example) but nothing in THIS scaffold ever declares that variable — six
-    live attempts were spent before this was noticed by hand. DIAGNOSTIC ONLY
-    (logged, not gating): a false positive here (e.g. the finding names an
-    interface that legitimately has no state variable) must not block a run
-    that could otherwise succeed."""
+    (`cancel()` with `TCancelGuard`, `setVaultExitBounds`). Six live attempts were
+    spent before this was noticed by hand. DIAGNOSTIC ONLY (logged, not gating): a
+    false positive here must not block a run that could otherwise succeed.
+
+    With `symbol_index` (feature 009 US3), resolution is AST-backed and
+    INHERITANCE-AWARE: the scaffold's own declarations come from parsing its source
+    (grammar-correct — no false match on a type named only in an import/comment),
+    and a type declared in an inherited PARENT base (resolved through the
+    project-wide `symbol_index`) counts as provided too — the cross-file case the
+    old single-file regex was blind to. Falls back to the single-file regex when
+    no index is available (`--no-symbol-index`)."""
     if not scaffold or not target_stems:
         return []
-    declared_types = set(_STATE_VAR_TYPE_RE.findall(scaffold))
-    return [s for s in target_stems if s not in declared_types]
+    if symbol_index is None:
+        declared_types = set(_STATE_VAR_TYPE_RE.findall(scaffold))
+        return [s for s in target_stems if s not in declared_types]
+    # AST path: the scaffold's own contracts (with their direct state vars + base
+    # names), then resolve each target through the scaffold's own index first and
+    # the project index (for inherited parents) second.
+    scaf_idx = SymbolIndex.build_from_source(scaffold)
+    scaffold_contracts = scaf_idx.contract_names()
+
+    def _provided(stem: str) -> bool:
+        for c in scaffold_contracts:
+            if scaf_idx.provides_state_var_type(c, stem):
+                return True                       # declared in the scaffold itself
+            for base in scaf_idx._bases.get(c, ()):
+                if symbol_index.provides_state_var_type(base, stem):
+                    return True                   # declared in an inherited parent
+        return False
+
+    return [s for s in target_stems if not _provided(s)]
 
 
 # ── File map: an authoritative index of every REAL contract/interface + path ──
@@ -950,6 +972,20 @@ def _compiled(stdout: str, stderr: str) -> bool:
     version ...` (a real compile failure with a different message) as "compiled",
     which produced a false "all 3 compiled" result (2026-07-05) that this fixes."""
     return bool(_RAN_TEST_RE.search(stdout + "\n" + stderr))
+
+
+# Stall detection keys on the error MESSAGE text, never a line number — the model
+# rewrites the whole file each attempt, so an identical persisting mistake lands on
+# a different line every time (root-caused 2026-07-05: a line-keyed signature missed
+# 4 of 5 real stalls on H-01 because the same error pair moved between lines across
+# attempts). `Error (NNNN): <message>` drops the code and keeps the message; the
+# `[FAIL: <reason>]` form covers a compiled-but-reverted run's failure reason.
+def _error_signature(blob: str) -> tuple[str, ...]:
+    return tuple(sorted(re.findall(r"Error \(\d+\): ([^\n]+)", blob)))
+
+
+def _fail_signature(blob: str) -> tuple[str, ...]:
+    return tuple(sorted(re.findall(r"\[FAIL:?\.?\s*([^\]]*)\]", blob)))
 
 
 def _sigs_for(callable_api: str, contract: str) -> str:
@@ -1372,6 +1408,213 @@ def fix(client: LocalClient, task: dict, previous: str, error: str,
     )
 
 
+def _process_finding(
+    task: dict, *, args, client, sandbox, log,
+    symbol_index, file_map: str, protocol_mode: str,
+    fork_rpc, require_pass_effective: bool, poc_dir: Path, tracer,
+) -> str:
+    """One finding's full draft→run→fix→classify→quarantine lifecycle, extracted
+    verbatim from main()'s per-finding loop (feature 009, contracts/
+    process-finding.md) so it can be driven end-to-end by an offline integration
+    test (fake client + fake sandbox) instead of only in a live GPU run. Emits the
+    same events in the same order via `log`, writes the same files, returns the
+    same `outcome` string. The wall-clock budget guard stays in main() (it gates
+    whether this is called at all)."""
+    fid = task["id"]
+    started = time.time()
+    log({"event": "task_start", "finding_id": fid, "title": task["title"]})
+
+    # Per-finding grounding: the project's PoC base (scaffold) + a real worked
+    # example (few-shot). Both git-tracked/original; the example excludes this
+    # finding's own name so it's never the answer.
+    target_stems = _location_names(task["location"])
+    scaffold_paths = resolve_scaffold(args.project, args.test_scaffold, args.no_scaffold, target_stems)
+    scaffold = read_scaffold(args.project, scaffold_paths)
+    example_path = resolve_example(args.project, args.example_poc, args.no_example,
+                                   scaffold_paths, exclude_stems=[fid, *target_stems])
+    example = read_example(args.project, example_path)
+    callable_api = "" if args.no_file_map else build_callable_api(args.project, task["location"], symbol_index)
+    guard = bool(scaffold) and _base_has_nonvirtual_setup(scaffold)
+    log({"event": "grounding", "finding_id": fid,
+         "scaffold": [str(p.relative_to(args.project)) for p in scaffold_paths],
+         "example": str(example_path.relative_to(args.project)) if example_path else None,
+         "callable_api_chars": len(callable_api), "setup_guard": guard})
+
+    missing_types = scaffold_missing_types(scaffold, target_stems, symbol_index)
+    if missing_types:
+        log({"event": "scaffold_insufficient", "finding_id": fid,
+             "missing_types": missing_types,
+             "hint": "the resolved scaffold declares no state variable of "
+                     "this type — no attempt can deploy/use it as-is; "
+                     "point --test-scaffold at a base that does (diagnostic "
+                     "only, does not block this run)"})
+
+    def _log_lookup(attempt_no: int):
+        def _cb(symbol: str, resolved: bool, match_count: int) -> None:
+            log({"event": "lookup", "finding_id": fid, "attempt": attempt_no,
+                 "symbol": symbol, "resolved": resolved, "match_count": match_count})
+        return _cb
+
+    try:
+        # session_id=fid links every draft/fix attempt for this finding as
+        # one browsable sequence in Langfuse's Sessions view — the actual
+        # agent trajectory, without needing to re-indent this whole loop
+        # body under one giant enclosing span.
+        with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
+            code = draft(client, task, args.project, scaffold, example, file_map, callable_api,
+                        symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode,
+                        tracer, trace)
+    except ModelUnavailableError as e:
+        log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
+        return "draft_failed"
+    if guard:
+        code, changed = _fix_setup_override(code)
+        if changed:
+            log({"event": "postfix_setup", "finding_id": fid, "stage": "draft"})
+    code, ip_changed = _fix_import_paths(code, args.project)
+    if ip_changed:
+        log({"event": "postfix_imports", "finding_id": fid, "stage": "draft"})
+
+    outcome = "unknown"
+    res = None
+    prev_error_sig: tuple | None = None
+    prev_fail_sig: tuple | None = None
+    for attempt in range(1, args.attempts + 1):
+        res = write_poc(fid, poc_dir, generator=lambda _f, c=code: c)
+        rel = str(res.path.relative_to(args.project))
+        log({"event": "written", "finding_id": fid, "attempt": attempt, "path": rel})
+
+        run_kwargs = {"image": args.image} if args.image else {}
+        try:
+            test = run_tests(
+                args.project, sandbox, test_path=rel,
+                foundry_test_dir=POC_SUBDIR,
+                timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
+                fork_rpc=fork_rpc,
+                **run_kwargs,
+            )
+        except SandboxUnavailable as e:
+            log({"event": "sandbox_unavailable", "finding_id": fid, "reason": str(e)})
+            outcome = "sandbox_unavailable"
+            break
+        except Exception as e:  # timeout etc — keep the queue moving
+            log({"event": "run_error", "finding_id": fid, "attempt": attempt, "error": str(e)})
+            outcome = "run_error"
+            break
+
+        # A result only counts if the PoC is structurally real (not vacuous/mocked).
+        defects = _poc_defects(code, target_stems, scaffold_used=bool(scaffold))
+        compiled = _compiled(test.stdout, test.stderr)
+        real_pass = test.passed and not defects
+        compiled_real = compiled and not defects   # path-A bar: builds + structurally real
+        # DIAGNOSTIC ONLY, never gates outcome: does the PoC call the finding's
+        # own function, or just deploy the right contract and exploit something
+        # else? A location-derived heuristic is too noisy to safely block on.
+        mech = mechanism_signal(code, task["location"], task["description"])
+        log({
+            "event": "tested", "finding_id": fid, "attempt": attempt,
+            "passed": test.passed, "compiled": compiled, "real_pass": real_pass,
+            "compiled_real": compiled_real, "defects": defects, "mechanism": mech,
+            "exit_code": test.exit_code,
+            "stdout_tail": test.stdout[-1200:], "stderr_tail": test.stderr[-1200:],
+        })
+        if real_pass:
+            outcome = "passed"                     # full success: green + real
+            break
+        if compiled_real and not require_pass_effective:
+            outcome = "compiled"                   # path-A success: builds + real (fork deferred)
+            break
+        if test.passed and defects:
+            log({"event": "rejected_vacuous", "finding_id": fid, "attempt": attempt, "defects": defects})
+        if attempt == args.attempts:
+            outcome = ("vacuous_pass" if test.passed else
+                       "reverted_exhausted" if compiled and not defects else
+                       "compile_only_defective" if compiled else "exhausted")
+            break
+        # Feed back: raw forge output + structural defects + TARGETED authoritative
+        # fixes (compile errors resolved against real signatures/paths) + REVERT
+        # hints (a genuine execution failure needs exploit-logic feedback, not a
+        # compile-error fix — the two error-fix cycles are handled separately).
+        defect_note = (
+            "\n\nSTRUCTURAL PROBLEMS — the test builds but proves nothing; fix ALL:\n- "
+            + "\n- ".join(defects) if defects else ""
+        )
+        hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map, code)
+        hint_note = f"\n\nTARGETED FIXES (authoritative — apply exactly):\n{hints}" if hints else ""
+        revert_note = ""
+        if compiled and not hints and not defects:
+            revert_note = "\n\n" + revert_hints(test.stdout, test.stderr, task)
+        if hints:
+            log({"event": "targeted_hints", "finding_id": fid, "attempt": attempt,
+                 "hints": hints[:300]})
+        elif revert_note.strip():
+            log({"event": "revert_hints", "finding_id": fid, "attempt": attempt,
+                 "hints": revert_note[:300]})
+        # Stall detection: the SAME error surviving into the next attempt means the
+        # previous fix didn't even try to address it — escalate rather than
+        # silently repeat the same hint. Covers BOTH compile errors and runtime FAIL
+        # reasons. Keyed on error message TEXT, not line number (see _error_signature).
+        error_sig = _error_signature(test.stdout + test.stderr)
+        fail_sig = _fail_signature(test.stdout + test.stderr)
+        stall_note = ""
+        if error_sig and error_sig == prev_error_sig:
+            stall_note = (
+                f"\n\nSTALL: the previous fix did NOT resolve this — the IDENTICAL compiler error(s) persist "
+                f"even after a full rewrite: {'; '.join(error_sig)[:300]}. Do not just rewrite the file again; "
+                "specifically locate every call/argument the targeted fix above describes and correct it — "
+                "if you already tried a similar edit, it was wrong in a way you haven't identified yet."
+            )
+            log({"event": "stall_detected", "finding_id": fid, "attempt": attempt, "kind": "compile"})
+        elif fail_sig and fail_sig == prev_fail_sig:
+            stall_note = (
+                f"\n\nSTALL: the previous fix did NOT change the runtime outcome — the test still fails with "
+                f"the EXACT SAME reason: {'; '.join(fail_sig)}. This is an EVM-logic stall, not a syntax one. "
+                "Reconsider WHO calls each step (vm.prank/startPrank target), WHETHER a precondition "
+                "(approval, balance, role, initial state) is actually established before the call that fails, "
+                "and whether the call ORDER matches the finding's described sequence — do not just reformat "
+                "the same call chain."
+            )
+            log({"event": "stall_detected", "finding_id": fid, "attempt": attempt, "kind": "runtime",
+                 "reason": fail_sig[:2]})
+        prev_error_sig, prev_fail_sig = error_sig, fail_sig
+        try:
+            with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
+                code = fix(client, task, code,
+                           test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
+                           args.project, scaffold, example, file_map, callable_api,
+                           symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode,
+                           tracer, trace)
+        except ModelUnavailableError as e:
+            log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
+            outcome = "fix_failed"
+            break
+        if guard:
+            code, changed = _fix_setup_override(code)
+            if changed:
+                log({"event": "postfix_setup", "finding_id": fid, "stage": f"fix{attempt}"})
+        code, ip_changed = _fix_import_paths(code, args.project)
+        if ip_changed:
+            log({"event": "postfix_imports", "finding_id": fid, "stage": f"fix{attempt}"})
+
+    # `forge test --match-path` only selects which tests RUN, not which
+    # files get COMPILED — every *.t.sol under FOUNDRY_TEST is compiled as
+    # one project, so a left-behind broken PoC from an earlier finding
+    # fails EVERY later finding's compile too (confirmed 2026-07-02: H-02's
+    # run failed on H-01's stale import error, not its own). Quarantine any
+    # non-COMPILING PoC out of poc_dir so later findings aren't blocked by it.
+    # A "compiled" (path-A) PoC stays: it builds, so it never blocks a later compile.
+    if outcome not in ("passed", "compiled") and res is not None:
+        quarantine_dir = poc_dir.parent / "poc_failed"
+        quarantine_dir.mkdir(parents=True, exist_ok=True)
+        dest = quarantine_dir / res.path.name
+        res.path.replace(dest)
+        log({"event": "quarantined", "finding_id": fid, "path": str(dest.relative_to(args.project))})
+
+    log({"event": "task_done", "finding_id": fid, "outcome": outcome,
+         "elapsed_s": round(time.time() - started, 1)})
+    return outcome
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--project", type=Path, default=os.environ.get("POC_PROJECT"), required="POC_PROJECT" not in os.environ,
@@ -1541,211 +1784,18 @@ def main() -> None:
 
     # ── Step 2: per task, draft → run → fix → rerun (up to N attempts) ───────
     for task in todo:
-        fid = task["id"]
         # Wall-clock budget: never START a finding past the cap, so a metered
         # cloud-GPU session stays bounded (the operator still Stops the session).
         if args.max_minutes and (time.monotonic() - run_start) / 60 >= args.max_minutes:
             log({"event": "budget_reached", "max_minutes": args.max_minutes,
                  "done_before_stop": todo.index(task)})
             break
-        started = time.time()
-        log({"event": "task_start", "finding_id": fid, "title": task["title"]})
-
-        # Per-finding grounding: the project's PoC base (scaffold) + a real worked
-        # example (few-shot). Both git-tracked/original; the example excludes this
-        # finding's own name so it's never the answer.
-        target_stems = _location_names(task["location"])
-        scaffold_paths = resolve_scaffold(args.project, args.test_scaffold, args.no_scaffold, target_stems)
-        scaffold = read_scaffold(args.project, scaffold_paths)
-        example_path = resolve_example(args.project, args.example_poc, args.no_example,
-                                       scaffold_paths, exclude_stems=[fid, *target_stems])
-        example = read_example(args.project, example_path)
-        callable_api = "" if args.no_file_map else build_callable_api(args.project, task["location"], symbol_index)
-        guard = bool(scaffold) and _base_has_nonvirtual_setup(scaffold)
-        log({"event": "grounding", "finding_id": fid,
-             "scaffold": [str(p.relative_to(args.project)) for p in scaffold_paths],
-             "example": str(example_path.relative_to(args.project)) if example_path else None,
-             "callable_api_chars": len(callable_api), "setup_guard": guard})
-
-        missing_types = scaffold_missing_types(scaffold, target_stems)
-        if missing_types:
-            log({"event": "scaffold_insufficient", "finding_id": fid,
-                 "missing_types": missing_types,
-                 "hint": "the resolved scaffold declares no state variable of "
-                         "this type — no attempt can deploy/use it as-is; "
-                         "point --test-scaffold at a base that does (diagnostic "
-                         "only, does not block this run)"})
-
-        def _log_lookup(attempt_no: int):
-            def _cb(symbol: str, resolved: bool, match_count: int) -> None:
-                log({"event": "lookup", "finding_id": fid, "attempt": attempt_no,
-                     "symbol": symbol, "resolved": resolved, "match_count": match_count})
-            return _cb
-
-        try:
-            # session_id=fid links every draft/fix attempt for this finding as
-            # one browsable sequence in Langfuse's Sessions view — the actual
-            # agent trajectory, without needing to re-indent this whole loop
-            # body under one giant enclosing span.
-            with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
-                code = draft(client, task, args.project, scaffold, example, file_map, callable_api,
-                            symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode,
-                            tracer, trace)
-        except ModelUnavailableError as e:
-            log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
-            continue
-        if guard:
-            code, changed = _fix_setup_override(code)
-            if changed:
-                log({"event": "postfix_setup", "finding_id": fid, "stage": "draft"})
-        code, ip_changed = _fix_import_paths(code, args.project)
-        if ip_changed:
-            log({"event": "postfix_imports", "finding_id": fid, "stage": "draft"})
-
-        outcome = "unknown"
-        res = None
-        prev_error_sig: tuple | None = None
-        prev_fail_sig: tuple | None = None
-        for attempt in range(1, args.attempts + 1):
-            res = write_poc(fid, poc_dir, generator=lambda _f, c=code: c)
-            rel = str(res.path.relative_to(args.project))
-            log({"event": "written", "finding_id": fid, "attempt": attempt, "path": rel})
-
-            run_kwargs = {"image": args.image} if args.image else {}
-            try:
-                test = run_tests(
-                    args.project, sandbox, test_path=rel,
-                    foundry_test_dir=POC_SUBDIR,
-                    timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
-                    fork_rpc=fork_rpc,
-                    **run_kwargs,
-                )
-            except SandboxUnavailable as e:
-                log({"event": "sandbox_unavailable", "finding_id": fid, "reason": str(e)})
-                outcome = "sandbox_unavailable"
-                break
-            except Exception as e:  # timeout etc — keep the queue moving
-                log({"event": "run_error", "finding_id": fid, "attempt": attempt, "error": str(e)})
-                outcome = "run_error"
-                break
-
-            # A result only counts if the PoC is structurally real (not vacuous/mocked).
-            defects = _poc_defects(code, target_stems, scaffold_used=bool(scaffold))
-            compiled = _compiled(test.stdout, test.stderr)
-            real_pass = test.passed and not defects
-            compiled_real = compiled and not defects   # path-A bar: builds + structurally real
-            # DIAGNOSTIC ONLY, never gates outcome: does the PoC call the finding's
-            # own function, or just deploy the right contract and exploit something
-            # else? A location-derived heuristic is too noisy to safely block on.
-            mech = mechanism_signal(code, task["location"], task["description"])
-            log({
-                "event": "tested", "finding_id": fid, "attempt": attempt,
-                "passed": test.passed, "compiled": compiled, "real_pass": real_pass,
-                "compiled_real": compiled_real, "defects": defects, "mechanism": mech,
-                "exit_code": test.exit_code,
-                "stdout_tail": test.stdout[-1200:], "stderr_tail": test.stderr[-1200:],
-            })
-            if real_pass:
-                outcome = "passed"                     # full success: green + real
-                break
-            if compiled_real and not require_pass_effective:
-                outcome = "compiled"                   # path-A success: builds + real (fork deferred)
-                break
-            if test.passed and defects:
-                log({"event": "rejected_vacuous", "finding_id": fid, "attempt": attempt, "defects": defects})
-            if attempt == args.attempts:
-                outcome = ("vacuous_pass" if test.passed else
-                           "reverted_exhausted" if compiled and not defects else
-                           "compile_only_defective" if compiled else "exhausted")
-                break
-            # Feed back: raw forge output + structural defects + TARGETED authoritative
-            # fixes (compile errors resolved against real signatures/paths) + REVERT
-            # hints (a genuine execution failure needs exploit-logic feedback, not a
-            # compile-error fix — the two error-fix cycles are handled separately).
-            defect_note = (
-                "\n\nSTRUCTURAL PROBLEMS — the test builds but proves nothing; fix ALL:\n- "
-                + "\n- ".join(defects) if defects else ""
-            )
-            hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map, code)
-            hint_note = f"\n\nTARGETED FIXES (authoritative — apply exactly):\n{hints}" if hints else ""
-            revert_note = ""
-            if compiled and not hints and not defects:
-                revert_note = "\n\n" + revert_hints(test.stdout, test.stderr, task)
-            if hints:
-                log({"event": "targeted_hints", "finding_id": fid, "attempt": attempt,
-                     "hints": hints[:300]})
-            elif revert_note.strip():
-                log({"event": "revert_hints", "finding_id": fid, "attempt": attempt,
-                     "hints": revert_note[:300]})
-            # Stall detection: the SAME error surviving into the next attempt means the
-            # previous fix didn't even try to address it — escalate rather than
-            # silently repeat the same hint. Covers BOTH compile errors and runtime FAIL
-            # reasons. Keyed on error CODE + MESSAGE TEXT, not line number: a model that
-            # rewrites the whole file between attempts shifts every line number even
-            # while repeating the identical semantic mistake (confirmed 2026-07-05,
-            # qwen3-coder:30b, H-01: the exact same "Named argument validUntil"/"Member
-            # shares not found" pair persisted across all 6 attempts, but the line-keyed
-            # signature only coincidentally matched twice — a false negative on 4 of 5
-            # real stalls, because the errors moved from lines 53/63 to 48/59 and back).
-            error_sig = tuple(sorted(re.findall(r"Error \(\d+\): ([^\n]+)", test.stdout + test.stderr)))
-            fail_sig = tuple(sorted(re.findall(r"\[FAIL:?\.?\s*([^\]]*)\]", test.stdout + test.stderr)))
-            stall_note = ""
-            if error_sig and error_sig == prev_error_sig:
-                stall_note = (
-                    f"\n\nSTALL: the previous fix did NOT resolve this — the IDENTICAL compiler error(s) persist "
-                    f"even after a full rewrite: {'; '.join(error_sig)[:300]}. Do not just rewrite the file again; "
-                    "specifically locate every call/argument the targeted fix above describes and correct it — "
-                    "if you already tried a similar edit, it was wrong in a way you haven't identified yet."
-                )
-                log({"event": "stall_detected", "finding_id": fid, "attempt": attempt, "kind": "compile"})
-            elif fail_sig and fail_sig == prev_fail_sig:
-                stall_note = (
-                    f"\n\nSTALL: the previous fix did NOT change the runtime outcome — the test still fails with "
-                    f"the EXACT SAME reason: {'; '.join(fail_sig)}. This is an EVM-logic stall, not a syntax one. "
-                    "Reconsider WHO calls each step (vm.prank/startPrank target), WHETHER a precondition "
-                    "(approval, balance, role, initial state) is actually established before the call that fails, "
-                    "and whether the call ORDER matches the finding's described sequence — do not just reformat "
-                    "the same call chain."
-                )
-                log({"event": "stall_detected", "finding_id": fid, "attempt": attempt, "kind": "runtime",
-                     "reason": fail_sig[:2]})
-            prev_error_sig, prev_fail_sig = error_sig, fail_sig
-            try:
-                with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
-                    code = fix(client, task, code,
-                               test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
-                               args.project, scaffold, example, file_map, callable_api,
-                               symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode,
-                               tracer, trace)
-            except ModelUnavailableError as e:
-                log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
-                outcome = "fix_failed"
-                break
-            if guard:
-                code, changed = _fix_setup_override(code)
-                if changed:
-                    log({"event": "postfix_setup", "finding_id": fid, "stage": f"fix{attempt}"})
-            code, ip_changed = _fix_import_paths(code, args.project)
-            if ip_changed:
-                log({"event": "postfix_imports", "finding_id": fid, "stage": f"fix{attempt}"})
-
-        # `forge test --match-path` only selects which tests RUN, not which
-        # files get COMPILED — every *.t.sol under FOUNDRY_TEST is compiled as
-        # one project, so a left-behind broken PoC from an earlier finding
-        # fails EVERY later finding's compile too (confirmed 2026-07-02: H-02's
-        # run failed on H-01's stale import error, not its own). Quarantine any
-        # non-COMPILING PoC out of poc_dir so later findings aren't blocked by it.
-        # A "compiled" (path-A) PoC stays: it builds, so it never blocks a later compile.
-        if outcome not in ("passed", "compiled") and res is not None:
-            quarantine_dir = poc_dir.parent / "poc_failed"
-            quarantine_dir.mkdir(parents=True, exist_ok=True)
-            dest = quarantine_dir / res.path.name
-            res.path.replace(dest)
-            log({"event": "quarantined", "finding_id": fid, "path": str(dest.relative_to(args.project))})
-
-        log({"event": "task_done", "finding_id": fid, "outcome": outcome,
-             "elapsed_s": round(time.time() - started, 1)})
-
+        _process_finding(
+            task, args=args, client=client, sandbox=sandbox, log=log,
+            symbol_index=symbol_index, file_map=file_map, protocol_mode=protocol_mode,
+            fork_rpc=fork_rpc, require_pass_effective=require_pass_effective,
+            poc_dir=poc_dir, tracer=tracer,
+        )
     log({"event": "done"})
 
 
