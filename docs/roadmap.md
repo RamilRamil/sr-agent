@@ -369,8 +369,19 @@ a placeholder also falls back, never crashes); each draft/fix generation records
 best-effort `seed_prompts` pushes the constants to Langfuse (`production`, no-op when
 disabled). Langfuse stays optional (constitution V). 11 new offline tests; (5) the 84
 `datetime.utcnow()` deprecation warnings and more architecture invariants (harness
-doesn't bypass sandbox; SourceType hierarchy) — low-grade cleanup, the last deferred
-harness-review candidate.
+doesn't bypass sandbox; SourceType hierarchy) — **LANDED as spec 013**: all
+`datetime.utcnow` usages in the kernel/pack removed for the tz-aware
+`datetime.now(timezone.utc)` — the scope grew from 6 direct call sites to **11 across 8
+files** once a bare-`utcnow` scan caught 5 `default_factory=datetime.utcnow` references
+(pydantic model fields in `models/memory.py`, `models/chat.py`, `packs/audit/session.py`)
+that emitted the same warning on instantiation; no test pins these fields' naive shape, so
+tz-aware is behavior-safe (verified by escalating the `utcnow` warning to an error over the
+previously-warning tests — 272 passed, 0 utcnow). Plus two new `tests/architecture/`
+invariants: `test_source_type_hierarchy.py` pins the `SourceType` trust ordering Principle I
+depends on (fails on a reorder), and `test_harness_sandbox_only.py` AST-asserts every direct
+subprocess in `scripts/poc_queue_runner.py` is a benign diff/VCS tool (`git`/`patch`) — PoC/forge
+execution must go through `run_tests`/`DockerSandbox` (fails if a direct `forge` exec is added).
+**This completes the harness-review remediation arc (specs 006–013).**
 
 **(optional) Frontend remainder** — the 6 deferred Phase-5 tasks (US4 provenance, US3 audit trail, T031 docker run-through) — see Phase 5.
 

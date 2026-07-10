@@ -8,7 +8,7 @@ section lists what Stage 1 prioritized vs skipped.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sr_agent.packs.audit.session import Stage1Report
 
@@ -61,7 +61,7 @@ def generate_report(
     generated_at: datetime | None = None,
     combinations: list[str] | None = None,
 ) -> str:
-    generated_at = generated_at or datetime.utcnow()
+    generated_at = generated_at or datetime.now(timezone.utc)
     visible = [f for f in findings if f.get("status", "open") not in _HIDDEN_STATUSES]
     main = [f for f in visible if f.get("status", "open") not in _UNVERIFIED_STATUSES]
     unverified = [f for f in visible if f.get("status", "open") in _UNVERIFIED_STATUSES]

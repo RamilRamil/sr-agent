@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sr_agent.memory.episodic import EpisodicMemory
 from sr_agent.packs.audit.session import AuditSession, Checkpoint
@@ -23,7 +23,7 @@ def save_checkpoint(
     """
     checkpoint = Checkpoint(
         stage=stage,
-        completed_at=datetime.utcnow(),
+        completed_at=datetime.now(timezone.utc),
         files_analyzed=files_analyzed or [],
         finding_ids=list(session.finding_ids),
     )

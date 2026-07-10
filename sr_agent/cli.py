@@ -69,7 +69,7 @@ def handle_turn(loop, session, memory, user_message: str):
     Separated from the click REPL so it's testable with a fake reasoning
     provider (no stdin, no real Ollama).
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
 
     from sr_agent.models.chat import ChatTurn
     from sr_agent.models.memory import SourceType
@@ -94,7 +94,7 @@ def handle_turn(loop, session, memory, user_message: str):
         routing_decision=result.routing,
         agent_action=None,
         source_type=SourceType.external_llm_output,
-        completed_at=datetime.utcnow() if result.status == "completed" else None,
+        completed_at=datetime.now(timezone.utc) if result.status == "completed" else None,
     )
     save_turn(session, turn, memory)
     return result

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -43,7 +43,7 @@ class Stage1Report(BaseModel):
 
 class Checkpoint(BaseModel):
     stage: int
-    completed_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     files_analyzed: list[str] = Field(default_factory=list)
     finding_ids: list[str] = Field(default_factory=list)
     high_priority_locations: list[str] = Field(default_factory=list)
@@ -56,7 +56,7 @@ class AuditSession(BaseModel):
     session_id: str = Field(default_factory=lambda: str(uuid4()))
     principal: Principal
     audit_input: AuditInput
-    started_at: datetime = Field(default_factory=datetime.utcnow)
+    started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Stage progress
     current_stage: int = 1
