@@ -358,12 +358,19 @@ fallback, spec 001 T079), but the PoC-harness prompts (`EXTRACT_PROMPT`, `DRAFT_
 `scripts/poc_queue_runner.py`) are raw inline constants — NOT versioned, NOT in
 Langfuse, so this session's heavy prompt iteration (exploit-quality checklist, Proof
 Explanation, tool-calling protocol) happened blind, with no prompt-version→trace
-linkage even though `Tracer` is already wired into draft/fix. Candidate: route the
-harness prompts through the same `tracer.get_prompt(name, fallback)` mechanism the
-kernel already uses, so each prompt is versioned and a run's trace records which
-version produced it (A/B and regression-tracking become possible); (5) the 84
+linkage even though `Tracer` is already wired into draft/fix. **LANDED as spec 012**:
+the six harness prompts (`poc-extract`/`poc-draft`/`poc-fix`/`poc-exploit-checklist`/
+`poc-lookup-marker`/`poc-synth-scaffold`) are now fetched via an additive
+`Tracer.get_prompt_versioned(name, fallback)` (the existing `get_prompt` + its kernel
+callers untouched), with the inline constant as the byte-exact fallback — so a
+tracing-off run is identical to before (a KeyError from an edited version that dropped
+a placeholder also falls back, never crashes); each draft/fix generation records
+`prompt_provenance` (name+version, `null` on fallback) in its trace metadata; and a
+best-effort `seed_prompts` pushes the constants to Langfuse (`production`, no-op when
+disabled). Langfuse stays optional (constitution V). 11 new offline tests; (5) the 84
 `datetime.utcnow()` deprecation warnings and more architecture invariants (harness
-doesn't bypass sandbox; SourceType hierarchy) — low-grade cleanup.
+doesn't bypass sandbox; SourceType hierarchy) — low-grade cleanup, the last deferred
+harness-review candidate.
 
 **(optional) Frontend remainder** — the 6 deferred Phase-5 tasks (US4 provenance, US3 audit trail, T031 docker run-through) — see Phase 5.
 

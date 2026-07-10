@@ -304,6 +304,50 @@ not invent API. Return ONLY the Solidity source of the base contract, no prose, 
 markdown fences."""
 
 
+# Feature 012: harness prompts under Langfuse Prompt Management. Each is fetched via
+# the tracer (versioned) with the inline constant as the byte-exact fallback — so a
+# tracing-off run is identical to before, and a run records which prompt version
+# produced it. The constants below stay the trust anchor + offline default.
+_HARNESS_PROMPTS = {
+    "poc-extract": EXTRACT_PROMPT,
+    "poc-draft": DRAFT_PROMPT,
+    "poc-fix": FIX_PROMPT,
+    "poc-exploit-checklist": EXPLOIT_QUALITY_CHECKLIST,
+    "poc-lookup-marker": _LOOKUP_MARKER_SUFFIX,
+    "poc-synth-scaffold": SYNTH_SCAFFOLD_PROMPT,
+}
+
+
+def _resolve_prompt(tracer, prompt_name: str, fallback: str, **fmt) -> tuple[str, dict]:
+    """Fetch a harness prompt (versioned) and format it, returning (text, provenance).
+    Feature 012: the fetched template is used when tracing is on and it formats
+    cleanly; on a format failure (an edited Langfuse version dropped a required
+    placeholder) OR tracing off, the byte-exact fallback constant is used and the
+    version is recorded as None (never fabricated). `prompt_name` (not `name`) so a
+    prompt with a `{name}` placeholder can pass `name=` as a format kwarg."""
+    template, version = tracer.get_prompt_versioned(prompt_name, fallback)
+    try:
+        text = template.format(**fmt) if fmt else template
+    except (KeyError, IndexError):
+        text = fallback.format(**fmt) if fmt else fallback
+        version = None
+    return text, {"name": prompt_name, "version": version}
+
+
+def seed_prompts(tracer) -> None:
+    """Best-effort push of the harness prompts to Langfuse Prompt Management under
+    their stable names (production), so there's a versioned baseline to edit
+    (feature 012, mirrors kernel T079). A silent no-op when Langfuse is disabled;
+    never a hard error."""
+    if not getattr(tracer, "enabled", False) or getattr(tracer, "_client", None) is None:
+        return
+    for name, constant in _HARNESS_PROMPTS.items():
+        try:
+            tracer._client.create_prompt(name=name, prompt=constant, labels=["production"])
+        except Exception:
+            pass
+
+
 def _ident(finding_id: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in finding_id)
 
@@ -320,11 +364,12 @@ def _strip_fences(text: str) -> str:
     return text
 
 
-def extract_tasks(client: LocalClient, report_path: Path) -> list[dict]:
+def extract_tasks(client: LocalClient, report_path: Path, tracer=NOOP_TRACER) -> list[dict]:
     """Step 1 — the model reads the report file and composes its own task list."""
     report = report_path.read_text(encoding="utf-8")
+    prompt, _ = _resolve_prompt(tracer, "poc-extract", EXTRACT_PROMPT, report=report)
     raw = client.generate(
-        EXTRACT_PROMPT.format(report=report),
+        prompt,
         fmt="json",
         options={"num_ctx": NUM_CTX, "num_predict": EXTRACT_PREDICT},
     )
@@ -642,7 +687,7 @@ _CONTRACT_NAME_RE = re.compile(r"\b(?:abstract\s+)?contract\s+([A-Za-z_]\w*)")
 
 def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
                         existing_scaffold: str, symbol_index, client, sandbox, log,
-                        *, image=None, fork_rpc=None) -> Path | None:
+                        *, image=None, fork_rpc=None, tracer=NOOP_TRACER) -> Path | None:
     """Synthesize + compile-validate a deploy-base for a finding's missing contract
     type(s) (feature 011 contracts/synthesize-scaffold.md). Returns the accepted
     base's Path (it compiled), or None on any failure (honest fallback — logged with
@@ -651,7 +696,8 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
     fid = task["id"]
     want_name = f"SynthBase_{_ident(fid)}"
     source = read_location_source(project, " ".join(missing_types))
-    prompt = SYNTH_SCAFFOLD_PROMPT.format(
+    prompt, _ = _resolve_prompt(
+        tracer, "poc-synth-scaffold", SYNTH_SCAFFOLD_PROMPT,
         missing=", ".join(missing_types), source=source,
         existing=existing_scaffold or "(none)", name=want_name,
     )
@@ -1573,14 +1619,15 @@ def _traced_round_trip(
     name: str, client: LocalClient, prompt: str,
     symbol_index: SymbolIndex | None, lookup_budget: int,
     on_lookup, protocol_mode: str,
-    tracer: Tracer, trace,
+    tracer: Tracer, trace, prompt_provenance: list[dict] | None = None,
 ) -> str:
     """Runs the draft/fix round-trip (marker or tool-calling protocol) and logs
-    it as one Langfuse generation — prompt, final code, and every lookup made
-    during it — so a finding's full agent trajectory (draft, every attempt's
-    fix, every lookup) is one browsable, comparable-across-runs Langfuse trace
-    instead of a flat JSONL line or an ad-hoc file dump."""
+    it as one Langfuse generation — prompt, final code, every lookup made during
+    it, and (feature 012) the prompt name+version provenance — so a finding's full
+    agent trajectory is one browsable, comparable-across-runs Langfuse trace and a
+    run records which prompt version produced which result."""
     lookups_seen: list[dict] = []
+    provenance = list(prompt_provenance or [])
 
     def _record(sym: str, resolved: bool, match_count: int) -> None:
         lookups_seen.append({"symbol": sym, "resolved": resolved, "match_count": match_count})
@@ -1588,7 +1635,9 @@ def _traced_round_trip(
             on_lookup(sym, resolved, match_count)
 
     if protocol_mode == "marker":
-        full_prompt = prompt + _LOOKUP_MARKER_SUFFIX
+        marker, marker_prov = _resolve_prompt(tracer, "poc-lookup-marker", _LOOKUP_MARKER_SUFFIX)
+        provenance.append(marker_prov)
+        full_prompt = prompt + marker
         code = _generate_with_lookups(
             client, full_prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
             symbol_index, lookup_budget, _record,
@@ -1601,7 +1650,8 @@ def _traced_round_trip(
         )
     tracer.generation(
         trace, name=name, model=client.model, input=full_prompt, output=code,
-        metadata={"protocol_mode": protocol_mode, "lookups": lookups_seen},
+        metadata={"protocol_mode": protocol_mode, "lookups": lookups_seen,
+                  "prompt_provenance": provenance},
     )
     return code
 
@@ -1612,16 +1662,18 @@ def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
           on_lookup=None, protocol_mode: str = "marker",
           tracer: Tracer = NOOP_TRACER, trace=None) -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
-    prompt = DRAFT_PROMPT.format(
+    checklist, checklist_prov = _resolve_prompt(tracer, "poc-exploit-checklist", EXPLOIT_QUALITY_CHECKLIST)
+    prompt, draft_prov = _resolve_prompt(
+        tracer, "poc-draft", DRAFT_PROMPT,
         fid=task["id"], title=task["title"], location=task["location"],
         description=task["description"], ident=_ident(task["id"]),
         source=source, scaffold=scaffold_field, example=example or "(none)",
         files=files or "(none)", callable=callable_api or "(none)",
-        exploit_quality_checklist=EXPLOIT_QUALITY_CHECKLIST,
+        exploit_quality_checklist=checklist,
     )
     return _traced_round_trip(
         "draft", client, prompt, symbol_index, lookup_budget, on_lookup,
-        protocol_mode, tracer, trace,
+        protocol_mode, tracer, trace, prompt_provenance=[draft_prov, checklist_prov],
     )
 
 
@@ -1631,16 +1683,18 @@ def fix(client: LocalClient, task: dict, previous: str, error: str,
         on_lookup=None, protocol_mode: str = "marker",
         tracer: Tracer = NOOP_TRACER, trace=None) -> str:
     source, scaffold_field = _grounding(project, task["location"], scaffold, callable_api)
-    prompt = FIX_PROMPT.format(
+    checklist, checklist_prov = _resolve_prompt(tracer, "poc-exploit-checklist", EXPLOIT_QUALITY_CHECKLIST)
+    prompt, fix_prov = _resolve_prompt(
+        tracer, "poc-fix", FIX_PROMPT,
         fid=task["id"], ident=_ident(task["id"]),
         previous=previous[-6000:], error=error[-4000:],
         source=source, scaffold=scaffold_field, example=example or "(none)",
         files=files or "(none)", callable=callable_api or "(none)",
-        exploit_quality_checklist=EXPLOIT_QUALITY_CHECKLIST,
+        exploit_quality_checklist=checklist,
     )
     return _traced_round_trip(
         "fix", client, prompt, symbol_index, lookup_budget, on_lookup,
-        protocol_mode, tracer, trace,
+        protocol_mode, tracer, trace, prompt_provenance=[fix_prov, checklist_prov],
     )
 
 
@@ -1692,7 +1746,7 @@ def _process_finding(
         if not args.no_scaffold_synthesis:
             synth = synthesize_scaffold(
                 args.project, task, missing_types, scaffold, symbol_index,
-                client, sandbox, log, image=args.image, fork_rpc=fork_rpc)
+                client, sandbox, log, image=args.image, fork_rpc=fork_rpc, tracer=tracer)
             if synth is not None:
                 scaffold_paths = [synth]
                 scaffold = read_scaffold(args.project, scaffold_paths)
@@ -1997,11 +2051,14 @@ def main() -> None:
         host=os.environ.get("LANGFUSE_HOST", "http://localhost:3000"),
     )
     log({"event": "tracer", "enabled": tracer.enabled})
+    # feature 012: seed the harness prompts into Langfuse (best-effort, no-op when
+    # disabled) so this run's fetches have a versioned baseline to resolve against.
+    seed_prompts(tracer)
 
     # ── Step 1: model builds its own task list from the report ───────────────
     log({"event": "extract_start", "report": str(args.report), "model": args.model})
     try:
-        tasks = extract_tasks(client, args.report)
+        tasks = extract_tasks(client, args.report, tracer)
     except (ModelUnavailableError, json.JSONDecodeError, OSError) as e:
         log({"event": "extract_failed", "error": str(e)})
         sys.exit(1)

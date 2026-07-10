@@ -280,3 +280,57 @@ def test_loop_synth_skipped_when_sufficient(tmp_path, monkeypatch):
                                     synth_returns="ok", monkeypatch=monkeypatch)
     assert n == 0  # never consulted
     assert not any(e["event"] in ("scaffold_synthesized", "scaffold_synthesis_failed") for e in events)
+
+
+# ── Feature 012: harness prompt management (identical-off + version recorded) ─
+
+class _PromptSpyClient:
+    """Captures the prompt text draft() feeds to generate() (marker mode)."""
+    model = "fake"
+    def __init__(self):
+        self.prompts = []
+    def generate(self, prompt, options=None):
+        self.prompts.append(prompt)
+        return REAL
+
+
+def test_loop_prompt_identical_when_tracing_off(tmp_path):
+    """FR-002/SC-001: with a disabled tracer, draft's assembled prompt equals the
+    pre-feature constant-based prompt (the fallback IS the constant)."""
+    spy = _PromptSpyClient()
+    # the byte-exact reference: format the constants exactly as the old code did
+    checklist = pqr.EXPLOIT_QUALITY_CHECKLIST
+    reference = pqr.DRAFT_PROMPT.format(
+        fid="H-01", title="t", location="", description="d", ident="H_01",
+        source="(no contract name found in location)",
+        scaffold="(no base provided — deploy the real contracts yourself; still NEVER mock them)",
+        example="(none)", files="(none)", callable="(none)",
+        exploit_quality_checklist=checklist,
+    ) + pqr._LOOKUP_MARKER_SUFFIX
+    task = {"id": "H-01", "title": "t", "location": "", "description": "d"}
+    pqr.draft(spy, task, tmp_path, protocol_mode="marker", tracer=NOOP_TRACER)
+    assert spy.prompts[-1] == reference  # byte-identical to pre-feature behavior
+
+
+def test_generation_records_prompt_version(tmp_path):
+    """SC-002/SC-003: a draft records prompt_provenance (name+version) in the
+    generation metadata; a fallback-sourced prompt records version None."""
+    class _VerTracer:
+        enabled = True
+        _client = None
+        def __init__(self): self.gen_meta = []
+        def get_prompt_versioned(self, name, fallback):
+            return (fallback, 3) if name == "poc-draft" else (fallback, None)
+        def trace(self, *a, **k):
+            import contextlib
+            return contextlib.nullcontext(None)
+        def generation(self, trace, *, name, model, input, output, usage=None, metadata=None):
+            self.gen_meta.append(metadata)
+    tr = _VerTracer()
+    spy = _PromptSpyClient()
+    task = {"id": "H-01", "title": "t", "location": "", "description": "d"}
+    pqr.draft(spy, task, tmp_path, protocol_mode="marker", tracer=tr)
+    prov = {p["name"]: p["version"] for p in tr.gen_meta[-1]["prompt_provenance"]}
+    assert prov["poc-draft"] == 3                     # fetched version recorded
+    assert prov["poc-exploit-checklist"] is None      # fallback-sourced → None
+    assert prov["poc-lookup-marker"] is None
