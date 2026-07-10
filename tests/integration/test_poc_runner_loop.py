@@ -153,3 +153,64 @@ def test_loop_budget_stop(tmp_path, monkeypatch):
 
     # only the first finding was processed before the budget tripped on the second.
     assert processed == ["A-01"]
+
+
+# ── Feature 010: mutation-verify wiring into the real_pass branch ───────────
+# mutation_verify's internals (extract/apply/classify) are unit-tested in
+# test_poc_queue_runner.py; here we test that the LOOP consults it exactly on a
+# genuine PASS and applies its verdict — verified/unavailable keep `passed`, only
+# unverified_pass downgrades.
+
+def _run_with_mutverify(task, project, *, results, verdict, monkeypatch, attempts=2):
+    result_q = list(results)
+    monkeypatch.setattr(pqr, "draft", lambda *a, **k: REAL)
+    monkeypatch.setattr(pqr, "fix", lambda *a, **k: REAL)
+    monkeypatch.setattr(pqr, "run_tests", lambda *a, **k: result_q.pop(0))
+    calls = {"n": 0}
+    def _fake_mutverify(*a, **k):
+        calls["n"] += 1
+        return verdict
+    monkeypatch.setattr(pqr, "mutation_verify", _fake_mutverify)
+    events = []
+    outcome = pqr._process_finding(
+        task, args=_args(project, attempts), client=object(), sandbox=object(),
+        log=events.append, symbol_index=None, file_map="", protocol_mode="marker",
+        fork_rpc=None, require_pass_effective=False, poc_dir=project / "audit" / "poc",
+        tracer=NOOP_TRACER,
+    )
+    return outcome, events, calls["n"]
+
+
+def test_loop_mutation_verified_keeps_passed(tmp_path, monkeypatch):
+    """A genuine PASS whose PoC then FAILS on the applied fix stays `passed`."""
+    task = {"id": "H-01", "title": "silo padding", "location": "", "description": "d", "fix": "DIFF"}
+    outcome, events, n = _run_with_mutverify(task, tmp_path, results=[_PASS], verdict="verified", monkeypatch=monkeypatch)
+    assert outcome == "passed"
+    assert n == 1  # consulted exactly once, on the pass
+
+
+def test_loop_mutation_unverified_downgrades(tmp_path, monkeypatch):
+    """The 2026-07-06 false-positive class: a PASS that STILL passes on the fix is
+    downgraded to `unverified_pass`, not reported as success (SC-001)."""
+    task = {"id": "H-01", "title": "silo padding", "location": "", "description": "d", "fix": "DIFF"}
+    outcome, events, n = _run_with_mutverify(task, tmp_path, results=[_PASS], verdict="unverified_pass", monkeypatch=monkeypatch)
+    assert outcome == "unverified_pass"
+    assert events[-1]["outcome"] == "unverified_pass"
+
+
+def test_loop_mutation_unavailable_keeps_passed(tmp_path, monkeypatch):
+    """When verification is unavailable (no fix / won't apply), the pass is kept —
+    never a false downgrade (SC-003)."""
+    task = {"id": "H-01", "title": "silo padding", "location": "", "description": "d", "fix": None}
+    outcome, events, n = _run_with_mutverify(task, tmp_path, results=[_PASS], verdict="unavailable", monkeypatch=monkeypatch)
+    assert outcome == "passed"
+
+
+def test_loop_mutation_not_consulted_on_non_pass(tmp_path, monkeypatch):
+    """mutation_verify runs ONLY on a genuine pass (FR-007) — a stall/exhausted
+    finding never consults it."""
+    task = {"id": "H-01", "title": "t", "location": "", "description": "d", "fix": "DIFF"}
+    _, _, n = _run_with_mutverify(
+        task, tmp_path, results=[_COMPILE_ERR, _COMPILE_ERR], verdict="verified",
+        monkeypatch=monkeypatch, attempts=2)
+    assert n == 0  # never consulted — the finding never passed

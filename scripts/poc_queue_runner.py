@@ -30,8 +30,10 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -299,12 +301,16 @@ def extract_tasks(client: LocalClient, report_path: Path) -> list[dict]:
     for i, t in enumerate(tasks):
         if not isinstance(t, dict) or not t.get("title"):
             continue
-        out.append({
+        finding = {
             "id": str(t.get("id") or f"T-{i+1:02d}"),
             "title": str(t.get("title", "")),
             "location": str(t.get("location", "")),
             "description": str(t.get("description", "")),
-        })
+        }
+        # feature 010: carry the finding's own fix diff (deterministically pulled
+        # from the report, NOT the model) for post-PASS mutation verification.
+        finding["fix"] = extract_fix_for_finding(report, finding)
+        out.append(finding)
     return out
 
 
@@ -1098,6 +1104,124 @@ def revert_hints(stdout: str, stderr: str, task: dict) -> str:
     )
 
 
+# ── Mutation-based PASS verification (feature 010) ────────────────────────────
+# A forge PASS on the VULNERABLE code is not a trustworthy success signal — an
+# unrelated test passes too (observed 2026-07-06: a defect-free, forge-PASSING
+# H-01 PoC that tested "revert on zero shares", nothing to do with the exploit).
+# The trustworthy signal (context-foundry-poc's invariant): a genuine exploit's
+# assertion must FAIL once the described bug is fixed. So: apply the finding's own
+# fix to an ephemeral copy of the source and re-run the SAME passing PoC — if it
+# now fails, the pass genuinely depends on the bug (verified); if it still passes,
+# it was testing something else (unverified_pass).
+_FINDING_HEADING_RE = re.compile(r"^\[\d+\]\s*\*\*\d+\.\s*(.+?)\*\*\s*$", re.M)
+_DIFF_BLOCK_RE = re.compile(r"```diff\n(.*?)```", re.S)
+_WORD_RE = re.compile(r"[A-Za-z_]\w+")
+
+
+def _title_tokens(text: str) -> set[str]:
+    # lowercase word tokens ≥4 chars, sans backticks — for finding↔section matching
+    return {w.lower() for w in _WORD_RE.findall(text) if len(w) >= 4}
+
+
+def extract_fix_for_finding(report_text: str, task: dict) -> str | None:
+    """The finding's suggested fix (its inline unified-diff block), pulled
+    DETERMINISTICALLY from the report — never via the model, which would risk
+    mangling the byte-exact diff (feature 010 research.md R1). Splits the report
+    into finding-sections (`[NN] **N. Title**` … next heading), matches `task` to
+    the section whose heading best token-overlaps `task['title']`, and returns that
+    section's fenced ```diff``` block verbatim, or None when there is no diff or no
+    confident match."""
+    headings = list(_FINDING_HEADING_RE.finditer(report_text))
+    if not headings:
+        return None
+    want = _title_tokens(task.get("title", ""))
+    if not want:
+        return None
+    best_i, best_overlap = -1, 0
+    for i, h in enumerate(headings):
+        overlap = len(want & _title_tokens(h.group(1)))
+        if overlap > best_overlap:
+            best_i, best_overlap = i, overlap
+    # Require a real overlap (at least 2 shared significant tokens) — a weak match
+    # is treated as "no confident fix" rather than risk pulling the wrong diff.
+    if best_i < 0 or best_overlap < 2:
+        return None
+    start = headings[best_i].end()
+    end = headings[best_i + 1].start() if best_i + 1 < len(headings) else len(report_text)
+    section = report_text[start:end]
+    m = _DIFF_BLOCK_RE.search(section)
+    return m.group(1) if m else None
+
+
+def _git_apply(copy_dir: Path, diff: str) -> bool:
+    """Apply `diff` to `copy_dir` with standard tooling — `git apply` first (handles
+    the report's git-style hunk headers), then `patch -p1 --forward`. Returns whether
+    it applied cleanly. No fuzzy patching (feature 010 FR-009): a diff that neither
+    tool applies is a clean failure the caller reports as `mutation_verify_unavailable`."""
+    if not diff.endswith("\n"):
+        diff += "\n"
+    try:
+        r = subprocess.run(["git", "apply", "--unsafe-paths", "-p1", "-"],
+                           cwd=str(copy_dir), input=diff, text=True,
+                           capture_output=True, timeout=30)
+        if r.returncode == 0:
+            return True
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(["patch", "-p1", "--forward", "--silent"],
+                           cwd=str(copy_dir), input=diff, text=True,
+                           capture_output=True, timeout=30)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+_MUTVERIFY_COPY_SKIP = shutil.ignore_patterns("out", "cache_forge", ".git", "node_modules")
+
+
+def mutation_verify(project: Path, task: dict, poc_rel_path: str, sandbox, log,
+                    *, fork_rpc=None, image=None) -> str:
+    """Post-PASS verification (feature 010 contracts/mutation-verify.md). Called
+    ONLY from `_process_finding`'s real_pass branch. Returns one of "verified",
+    "unverified_pass", "unavailable". Never mutates the real target tree (FR-004):
+    all work is on a temp copy, deleted in `finally`. Never downgrades on an
+    inability to verify (FR-005/FR-006): only a real test FAILURE on a BUILT patched
+    source yields "unverified_pass"."""
+    fid = task.get("id", "?")
+    fix = task.get("fix")
+    if not fix:
+        log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": "no_fix"})
+        return "unavailable"
+    copy_root = Path(tempfile.mkdtemp(prefix="mutverify-"))
+    copy = copy_root / project.name
+    try:
+        shutil.copytree(project, copy, ignore=_MUTVERIFY_COPY_SKIP, symlinks=True)
+        if not _git_apply(copy, fix):
+            log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": "patch_failed"})
+            return "unavailable"
+        try:
+            test = run_tests(
+                copy, sandbox, test_path=poc_rel_path, foundry_test_dir=POC_SUBDIR,
+                timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
+                fork_rpc=fork_rpc, **({"image": image} if image else {}),
+            )
+        except Exception as e:  # SandboxUnavailable, timeout, … — infra, not a failure
+            log({"event": "mutation_verify_unavailable", "finding_id": fid,
+                 "reason": "infra", "error": str(e)[:200]})
+            return "unavailable"
+        if not _compiled(test.stdout, test.stderr):
+            log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": "patched_no_build"})
+            return "unavailable"
+        if test.passed:
+            log({"event": "mutation_unverified", "finding_id": fid})
+            return "unverified_pass"
+        log({"event": "mutation_verified", "finding_id": fid})
+        return "verified"
+    finally:
+        shutil.rmtree(copy_root, ignore_errors=True)
+
+
 # ── Agentic lookup round-trip (feature 007 text-marker + feature 008 tool-calling) ──
 # Feature 007 shipped the bounded, text-marker protocol below (contracts/
 # lookup-protocol.md, research.md R2): a plain `LOOKUP: <Name>` line, needed
@@ -1520,6 +1644,13 @@ def _process_finding(
         })
         if real_pass:
             outcome = "passed"                     # full success: green + real
+            # feature 010: a forge PASS isn't trustworthy until we've shown it
+            # DEPENDS on the bug — re-run this same PoC against the finding's own
+            # fix applied to an ephemeral source copy. Still passes on the fix →
+            # it wasn't testing the exploit → downgrade to unverified_pass.
+            if mutation_verify(args.project, task, rel, sandbox, log,
+                               fork_rpc=fork_rpc, image=args.image) == "unverified_pass":
+                outcome = "unverified_pass"
             break
         if compiled_real and not require_pass_effective:
             outcome = "compiled"                   # path-A success: builds + real (fork deferred)

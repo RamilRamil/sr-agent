@@ -330,9 +330,28 @@ no longer false-flagged as missing — the last regex-fragility class from the 0
 arc). **Remaining review findings, deferred to their own specs** (ranked): (2)
 automated independent PASS verification — mutation-style "would the assertion fail if
 the described bug were patched?" turning `mechanism_signal` from a heuristic into a
-real correctness gate (the deepest "do we trust a green run" question); (3) Stage 1
-large-model scaffold synthesis (write the deploy-base when `scaffold_missing_types`
-flags it, instead of a human hand-writing `PashovSharesCooldownBase`); (4) the 84
+real correctness gate (the deepest "do we trust a green run" question) — **LANDED as
+spec 010**: a genuine PASS is now re-run against the finding's own fix applied to an
+ephemeral source copy (real tree never touched); still passes on the fix →
+`unverified_pass` (the exact 2026-07-06 false-positive class, now caught
+automatically), fails on the fix → verified, no applicable/appliable fix →
+`mutation_verify_unavailable` keeping `passed` (never a false downgrade). Fix diffs
+are pulled deterministically from the report (not via the model, to keep them
+byte-exact); applied with `git apply`/`patch`; all orchestration offline-tested
+through spec 009's fake harness; (3) Stage 1 large-model scaffold synthesis (write the deploy-base
+when `scaffold_missing_types` flags it, instead of a human hand-writing
+`PashovSharesCooldownBase`); (4) **harness prompt management** — the kernel/pack
+prompts (`claude-react-system`, `stage2-local-analysis`, `AUDIT_CHAT_SYSTEM`) are
+already under Langfuse Prompt Management (versioned, `production`-labelled, graceful
+fallback, spec 001 T079), but the PoC-harness prompts (`EXTRACT_PROMPT`, `DRAFT_PROMPT`,
+`FIX_PROMPT`, `EXPLOIT_QUALITY_CHECKLIST`, `_LOOKUP_MARKER_SUFFIX` in
+`scripts/poc_queue_runner.py`) are raw inline constants — NOT versioned, NOT in
+Langfuse, so this session's heavy prompt iteration (exploit-quality checklist, Proof
+Explanation, tool-calling protocol) happened blind, with no prompt-version→trace
+linkage even though `Tracer` is already wired into draft/fix. Candidate: route the
+harness prompts through the same `tracer.get_prompt(name, fallback)` mechanism the
+kernel already uses, so each prompt is versioned and a run's trace records which
+version produced it (A/B and regression-tracking become possible); (5) the 84
 `datetime.utcnow()` deprecation warnings and more architecture invariants (harness
 doesn't bypass sandbox; SourceType hierarchy) — low-grade cleanup.
 
