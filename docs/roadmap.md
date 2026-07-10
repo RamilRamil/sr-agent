@@ -338,9 +338,19 @@ automatically), fails on the fix → verified, no applicable/appliable fix →
 `mutation_verify_unavailable` keeping `passed` (never a false downgrade). Fix diffs
 are pulled deterministically from the report (not via the model, to keep them
 byte-exact); applied with `git apply`/`patch`; all orchestration offline-tested
-through spec 009's fake harness; (3) Stage 1 large-model scaffold synthesis (write the deploy-base
-when `scaffold_missing_types` flags it, instead of a human hand-writing
-`PashovSharesCooldownBase`); (4) **harness prompt management** — the kernel/pack
+through spec 009's fake harness; (3) Stage 1 scaffold synthesis — **LANDED as spec
+011**: when `scaffold_missing_types` flags that the auto-discovered base can't deploy a
+contract a finding needs (the exact H-01 blocker — six live attempts burned on
+`sharesCooldown` being undeclared), the harness now synthesizes a deploy-base that
+declares+deploys it (via the harness's own model, no new paid-API dependency, grounded
+in the missing contract's real source + the existing base as pattern),
+COMPILE-validates it in the sandbox (a base that doesn't build is discarded — the
+eval-robustness bar), and drafts under it on success; every failure path
+(`no_output`/`no_build`/`infra`) falls back honestly to the prior scaffold with a
+logged reason, never blocking the run, never using a non-compiling base; synthesized
+bases live only in an untracked `audit/poc/_synth/` area (tracked source untouched),
+and any resulting PASS is still spec-010 mutation-verified. 6 new offline tests
+(`--no-scaffold-synthesis` off-switch; default on); (4) **harness prompt management** — the kernel/pack
 prompts (`claude-react-system`, `stage2-local-analysis`, `AUDIT_CHAT_SYSTEM`) are
 already under Langfuse Prompt Management (versioned, `production`-labelled, graceful
 fallback, spec 001 T079), but the PoC-harness prompts (`EXTRACT_PROMPT`, `DRAFT_PROMPT`,

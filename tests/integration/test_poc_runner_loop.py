@@ -26,6 +26,7 @@ def _args(project: Path, attempts: int = 3) -> types.SimpleNamespace:
     return types.SimpleNamespace(
         project=project, test_scaffold="", no_scaffold=True, no_example=True,
         example_poc="", no_file_map=True, lookup_budget=0, attempts=attempts, image=None,
+        no_scaffold_synthesis=False,
     )
 
 
@@ -214,3 +215,68 @@ def test_loop_mutation_not_consulted_on_non_pass(tmp_path, monkeypatch):
         task, tmp_path, results=[_COMPILE_ERR, _COMPILE_ERR], verdict="verified",
         monkeypatch=monkeypatch, attempts=2)
     assert n == 0  # never consulted — the finding never passed
+
+
+# ── Feature 011: scaffold synthesis wiring into _process_finding ────────────
+# synthesize_scaffold's internals are unit-tested; here we test that the loop
+# consults it exactly on detected insufficiency and swaps the scaffold on success,
+# falls back on failure, and never consults it when the scaffold is sufficient.
+
+def _run_synth(task, project, *, missing, synth_returns, monkeypatch):
+    monkeypatch.setattr(pqr, "scaffold_missing_types", lambda *a, **k: missing)
+    calls = {"n": 0}
+    def _fake_synth(proj, tsk, miss, existing, si, cl, sb, log, **k):
+        calls["n"] += 1
+        if synth_returns is None:
+            log({"event": "scaffold_synthesis_failed", "finding_id": tsk["id"], "reason": "no_build"})
+            return None
+        # write a real base file so read_scaffold can read it back
+        d = project / "audit" / "poc" / "_synth"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "SynthBase.sol"
+        p.write_text("// SPDX\npragma solidity ^0.8.28;\nabstract contract SynthBase {}\n", encoding="utf-8")
+        log({"event": "scaffold_synthesized", "finding_id": tsk["id"], "path": str(p.relative_to(project))})
+        return p
+    monkeypatch.setattr(pqr, "synthesize_scaffold", _fake_synth)
+    monkeypatch.setattr(pqr, "draft", lambda *a, **k: REAL)
+    monkeypatch.setattr(pqr, "run_tests", lambda *a, **k: _PASS)
+    monkeypatch.setattr(pqr, "mutation_verify", lambda *a, **k: "unavailable")
+    events = []
+    outcome = pqr._process_finding(
+        task, args=_args(project, 1), client=object(), sandbox=object(),
+        log=events.append, symbol_index=None, file_map="", protocol_mode="marker",
+        fork_rpc=None, require_pass_effective=False, poc_dir=project / "audit" / "poc",
+        tracer=NOOP_TRACER,
+    )
+    return outcome, events, calls["n"]
+
+
+def test_loop_synth_used_on_success(tmp_path, monkeypatch):
+    """An insufficient-scaffold finding whose synthesis succeeds drafts under the
+    synthesized base (a `scaffold_synthesized` grounding swap is emitted)."""
+    task = {"id": "H-01", "title": "silo padding", "location": "SharesCooldown", "description": "d"}
+    outcome, events, n = _run_synth(task, tmp_path, missing=["SharesCooldown"],
+                                    synth_returns="ok", monkeypatch=monkeypatch)
+    assert n == 1  # synthesis consulted on insufficiency
+    assert any(e["event"] == "scaffold_synthesized" for e in events)
+    assert any(e.get("stage") == "synthesized" for e in events)  # scaffold swapped
+
+
+def test_loop_synth_fallback_on_failure(tmp_path, monkeypatch):
+    """Synthesis failure keeps the finding on its prior scaffold and never blocks."""
+    task = {"id": "H-01", "title": "t", "location": "SharesCooldown", "description": "d"}
+    outcome, events, n = _run_synth(task, tmp_path, missing=["SharesCooldown"],
+                                    synth_returns=None, monkeypatch=monkeypatch)
+    assert n == 1
+    assert any(e["event"] == "scaffold_synthesis_failed" for e in events)
+    assert not any(e.get("stage") == "synthesized" for e in events)  # no swap
+    assert events[-1]["event"] == "task_done"  # run proceeded, not blocked
+
+
+def test_loop_synth_skipped_when_sufficient(tmp_path, monkeypatch):
+    """A finding whose scaffold is sufficient never consults synthesis (SC-003)."""
+    task = {"id": "H-01", "title": "t", "location": "SharesCooldown", "description": "d"}
+    outcome, events, n = _run_synth(task, tmp_path, missing=[],  # sufficient
+                                    synth_returns="ok", monkeypatch=monkeypatch)
+    assert n == 0  # never consulted
+    assert not any(e["event"] in ("scaffold_synthesized", "scaffold_synthesis_failed") for e in events)
