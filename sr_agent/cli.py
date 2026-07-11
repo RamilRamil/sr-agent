@@ -416,6 +416,94 @@ def confirm_cmd(confirmation_id: str, approve: bool, reject: bool, show: bool) -
     click.echo(f"Confirmation {confirmation_id}: {status.value}")
 
 
+@cli.command("lessons")
+@click.argument("subcommand",
+                type=click.Choice(["list", "show", "approve", "dismiss", "verify", "add"]))
+@click.argument("sig_id", required=False)
+@click.option("--from", "from_file", type=click.Path(exists=True),
+              help="JSON candidate file for `add` (seeding a hand-authored lesson).")
+@click.option("--edit", "edit_file", type=click.Path(exists=True),
+              help="Markdown replacement content for `approve`.")
+def lessons_cmd(subcommand: str, sig_id: str | None,
+                from_file: str | None, edit_file: str | None) -> None:
+    """Experiential knowledge loop (feature 014) — review and promote lesson candidates.
+
+    Out-of-band, a separate process from the agent/harness loop: `approve` is the ONLY
+    path that promotes a lesson into the retrievable corpus (the agent can never promote
+    its own knowledge — Principle IV). Promotion signs the lesson (tamper-evident) and
+    grants authorization=human_input while keeping origin=llm_inference (honest audit).
+    """
+    import json
+    from dataclasses import asdict
+
+    from sr_agent.memory.lessons import LessonCandidate, LessonStore
+
+    store = LessonStore(config.lessons_root, config.knowledge_root, config.secret_key)
+
+    if subcommand == "list":
+        pending = store.list_pending()
+        if not pending:
+            click.echo("No pending lessons.")
+            return
+        for c in pending:
+            click.echo(f"{c.sig_id}  [{c.category}]  {c.symptom[:70]}")
+        return
+
+    if subcommand == "verify":
+        report = store.verify()
+        for sid, status in sorted(report.per_lesson.items()):
+            click.echo(f"  {sid}: {status}")
+        click.echo(f"Total: {report.valid}/{report.total} valid, {report.invalid} invalid")
+        sys.exit(1 if report.has_invalid else 0)
+
+    if subcommand == "add":
+        if not from_file:
+            click.echo("`add` requires --from <file>.", err=True)
+            sys.exit(2)
+        data = json.loads(Path(from_file).read_text(encoding="utf-8"))
+        cand = LessonCandidate.create(
+            trigger_signature=data["trigger_signature"],
+            symptom=data.get("symptom", ""),
+            fix=data.get("fix", ""),
+            category=data.get("category", "poc-compile"),
+        )
+        store.add(cand)
+        click.echo(f"Candidate {cand.sig_id} queued for review.")
+        return
+
+    # remaining subcommands need a sig_id
+    if not sig_id:
+        click.echo(f"`{subcommand}` requires <sig_id>.", err=True)
+        sys.exit(2)
+
+    if subcommand == "show":
+        cand = store.show(sig_id)
+        if cand is None:
+            click.echo(f"No pending lesson {sig_id}.", err=True)
+            sys.exit(2)
+        click.echo(json.dumps(asdict(cand), indent=2))
+        return
+
+    if subcommand == "dismiss":
+        if store.dismiss(sig_id):
+            click.echo(f"Lesson {sig_id} dismissed.")
+            return
+        click.echo(f"No pending lesson {sig_id}.", err=True)
+        sys.exit(2)
+
+    if subcommand == "approve":
+        edited = Path(edit_file).read_text(encoding="utf-8") if edit_file else None
+        try:
+            lesson = store.promote(sig_id, edited_content=edited)
+        except FileNotFoundError as e:
+            click.echo(f"Error: {e}", err=True)
+            sys.exit(2)
+        ok = store.verify().per_lesson.get(sig_id) == "OK"
+        click.echo(f"Lesson {sig_id} promoted (category {lesson.category}); "
+                   f"signature {'verifies' if ok else 'FAILED'}.")
+        return
+
+
 @cli.command("relay")
 @click.argument("request_id", required=False)
 @click.option("--show", is_flag=True, help="Print the request packet to copy into Claude")
