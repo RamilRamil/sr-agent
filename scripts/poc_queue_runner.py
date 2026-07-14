@@ -45,7 +45,7 @@ from sr_agent.tools.sandbox import DockerSandbox, SandboxUnavailable
 from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 
-from scripts.solidity_index import SymbolIndex
+from scripts.solidity_index import SymbolIndex, expand_referenced_types
 
 # ── Defaults (overridable via CLI) ───────────────────────────────────────────
 # The target project + audit report are ALWAYS supplied by the operator at the
@@ -362,6 +362,36 @@ def _strip_fences(text: str) -> str:
             lines = lines[:-1]
         text = "\n".join(lines)
     return text
+
+
+# Lines whose stripped form starts with one of these anchor the start of real Solidity.
+_SOLIDITY_TOKENS = ("// SPDX", "pragma", "import", "contract", "interface",
+                    "library", "abstract contract")
+
+
+def _extract_solidity(text: str) -> str:
+    """Extract the real Solidity source from a model reply, or "" if there is none.
+
+    Feature 015 US1: qwen3-coder:30b wraps its code in chain-of-thought prose ("Looking at
+    the compilation errors… Let me analyze…") and, in tool mode, sometimes returns no code
+    at all — both of which used to be written verbatim as the PoC (a spurious `Expected ';'`
+    or a vacuous empty test). This anchors on the first Solidity token and the last brace so
+    leading/trailing prose and markdown fences are dropped; a reply with no Solidity token
+    returns "" (the caller then fails the draft/fix instead of writing garbage)."""
+    lines = _strip_fences(text).splitlines()
+    start = next((i for i, ln in enumerate(lines)
+                  if any(ln.strip().startswith(tok) for tok in _SOLIDITY_TOKENS)), None)
+    if start is None:
+        return ""
+    # End at the last line that closes code or a block comment (keeps a trailing
+    # `/* Proof Explanation */`); anything after (a stray ``` or a prose sentence) is dropped.
+    end = start
+    for i in range(len(lines) - 1, start - 1, -1):
+        s = lines[i].rstrip()
+        if "}" in s or s.endswith("*/") or s.endswith(";"):
+            end = i
+            break
+    return "\n".join(lines[start:end + 1]).strip()
 
 
 def extract_tasks(client: LocalClient, report_path: Path, tracer=NOOP_TRACER) -> list[dict]:
@@ -702,7 +732,7 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
         existing=existing_scaffold or "(none)", name=want_name,
     )
     try:
-        code = _strip_fences(client.generate(prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
+        code = _extract_solidity(client.generate(prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
     except ModelUnavailableError as e:
         log({"event": "scaffold_synthesis_failed", "finding_id": fid, "reason": "no_output",
              "error": str(e)[:200]})
@@ -1465,7 +1495,7 @@ def _generate_with_lookups(
         raw = client.generate(current_prompt, options=options)
         names = _LOOKUP_RE.findall(raw)
         if not names or symbol_index is None or used >= budget:
-            return _strip_fences(raw)
+            return _extract_solidity(raw)
         to_resolve = names[: budget - used]
         resolved = [(n, symbol_index.lookup(n)) for n in to_resolve]
         for name, matches in resolved:
@@ -1581,7 +1611,7 @@ def _generate_with_tool_calls(
             # FR-007: never let a raw <function=...> fragment reach the PoC
             # file even when the round-trip is ending (budget exhausted, or a
             # malformed call couldn't be parsed at all).
-            return _strip_fences(_strip_tool_scaffolding(content))
+            return _extract_solidity(_strip_tool_scaffolding(content))
         to_resolve = calls[: budget - used]
         # Only attach tool_calls to the replayed assistant turn when Ollama
         # itself produced them — for the raw-text fallback, `content` already
@@ -1648,6 +1678,18 @@ def _traced_round_trip(
             client, full_prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
             symbol_index, lookup_budget, _record,
         )
+        # Feature 015 US1: qwen3-coder:30b in native tool-calling mode sometimes returns no
+        # Solidity at all (→ an empty PoC, a vacuous pass). Fall back once to the marker
+        # protocol for this round-trip rather than emit an empty file.
+        if not code.strip():
+            marker, marker_prov = _resolve_prompt(tracer, "poc-lookup-marker", _LOOKUP_MARKER_SUFFIX)
+            provenance.append(marker_prov)
+            full_prompt = prompt + marker
+            code = _generate_with_lookups(
+                client, full_prompt, {"num_ctx": NUM_CTX, "num_predict": POC_PREDICT},
+                symbol_index, lookup_budget, _record,
+            )
+            protocol_mode = "tool→marker"
     tracer.generation(
         trace, name=name, model=client.model, input=full_prompt, output=code,
         metadata={"protocol_mode": protocol_mode, "lookups": lookups_seen,
@@ -1685,9 +1727,13 @@ def _append_lessons(prompt: str, store, context: str) -> str:
 
 
 def _maybe_capture_lesson(store, log, fid, attempt, *, prev_error_sig, error_sig,
-                          prev_fail_sig, real_pass, prev_symptom, prev_code, code) -> None:
-    """On a resolved-error-signature transition (a previously-stuck signature cleared),
-    emit ONE deduplicated lesson candidate. Best-effort — never breaks the run (FR-001)."""
+                          prev_fail_sig, real_pass, compiled, prev_symptom, prev_code, code) -> None:
+    """Capture ONE deduplicated lesson candidate only on a transition into a genuinely-better
+    verdict — the attempt actually COMPILED (or reached real_pass), clearing a previously-stuck
+    signature. Feature 015 US3: gating on `compiled`/`real_pass` (not merely "prev signature
+    absent") prevents a false-positive lesson when the model REGRESSES into a different error
+    (e.g. prose-in-.sol → a new `Expected ';'`), which also makes the prior signature disappear
+    but is not real progress. Best-effort — never breaks the run (FR-001)."""
     if store is None:
         return
     try:
@@ -1695,8 +1741,10 @@ def _maybe_capture_lesson(store, log, fid, attempt, *, prev_error_sig, error_sig
 
         from sr_agent.memory.lessons import LessonCandidate
         trigger, category = None, None
-        if prev_error_sig and not (set(prev_error_sig) & set(error_sig)):
-            trigger, category = list(prev_error_sig), "poc-compile"   # compile errors cleared
+        # Compile lesson: the prior compile errors were cleared BY ACTUALLY COMPILING — not by
+        # trading them for a different (still-failing) error.
+        if prev_error_sig and compiled and not (set(prev_error_sig) & set(error_sig)):
+            trigger, category = list(prev_error_sig), "poc-compile"
         elif prev_fail_sig and real_pass:
             trigger, category = list(prev_fail_sig), "poc-runtime"    # runtime failure cleared
         if not trigger:
@@ -1714,6 +1762,18 @@ def _maybe_capture_lesson(store, log, fid, attempt, *, prev_error_sig, error_sig
         log({"event": "lesson_capture_error", "finding_id": fid, "error": str(e)})
 
 
+def _callable_field(callable_api: str, symbol_index: SymbolIndex | None) -> str:
+    """callable_api + proactively-expanded struct/enum field definitions (feature 015 US2):
+    the model sees the real fields of referenced structs/enums before it constructs them,
+    instead of inventing field names/counts."""
+    base = callable_api or "(none)"
+    defs = expand_referenced_types(callable_api, symbol_index) if symbol_index else ""
+    if defs:
+        base += ("\n\n// STRUCT/ENUM DEFINITIONS referenced above — construct these with "
+                 "EXACTLY these fields (do not invent field names or counts):\n" + defs)
+    return base
+
+
 def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
           example: str = "", files: str = "", callable_api: str = "",
           symbol_index: SymbolIndex | None = None, lookup_budget: int = DEFAULT_LOOKUP_BUDGET,
@@ -1726,7 +1786,7 @@ def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
         fid=task["id"], title=task["title"], location=task["location"],
         description=task["description"], ident=_ident(task["id"]),
         source=source, scaffold=scaffold_field, example=example or "(none)",
-        files=files or "(none)", callable=callable_api or "(none)",
+        files=files or "(none)", callable=_callable_field(callable_api, symbol_index),
         exploit_quality_checklist=checklist,
     )
     prompt = _append_lessons(
@@ -1749,7 +1809,7 @@ def fix(client: LocalClient, task: dict, previous: str, error: str,
         fid=task["id"], ident=_ident(task["id"]),
         previous=previous[-6000:], error=error[-4000:],
         source=source, scaffold=scaffold_field, example=example or "(none)",
-        files=files or "(none)", callable=callable_api or "(none)",
+        files=files or "(none)", callable=_callable_field(callable_api, symbol_index),
         exploit_quality_checklist=checklist,
     )
     prompt = _append_lessons(prompt, lessons, error)
@@ -1839,6 +1899,11 @@ def _process_finding(
     except ModelUnavailableError as e:
         log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
         return "draft_failed"
+    # Feature 015 US1: a reply with no Solidity (prose-only / empty tool round-trip) yields
+    # "" — never write a prose-only or empty PoC; fail the draft honestly instead.
+    if not code.strip():
+        log({"event": "draft_failed", "finding_id": fid, "error": "no Solidity in model reply"})
+        return "draft_failed"
     if guard:
         code, changed = _fix_setup_override(code)
         if changed:
@@ -1900,7 +1965,7 @@ def _process_finding(
         _maybe_capture_lesson(
             lessons, log, fid, attempt,
             prev_error_sig=prev_error_sig, error_sig=error_sig,
-            prev_fail_sig=prev_fail_sig, real_pass=real_pass,
+            prev_fail_sig=prev_fail_sig, real_pass=real_pass, compiled=compiled,
             prev_symptom=prev_symptom, prev_code=prev_code, code=code)
         if real_pass:
             outcome = "passed"                     # full success: green + real
@@ -1981,6 +2046,11 @@ def _process_finding(
             log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
             outcome = "fix_failed"
             break
+        # Feature 015 US1: a fix that produced no Solidity must not overwrite the PoC with an
+        # empty/prose file — keep the last valid code (stall detection then escalates).
+        if not code.strip():
+            log({"event": "fix_no_code", "finding_id": fid, "attempt": attempt})
+            code = prev_code or code
         if guard:
             code, changed = _fix_setup_override(code)
             if changed:

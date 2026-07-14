@@ -15,6 +15,7 @@ access-control modifiers, an enum's values — is grammar-correct, never guessed
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -285,3 +286,52 @@ class SymbolIndex:
                 idx.unparsed_files.append(path)
                 logger.debug("solidity_index: failed to parse %s (%s)", path, e)
         return idx
+
+
+def expand_referenced_types(callable_api: str, index: "SymbolIndex | None",
+                            *, budget: int = 2000) -> str:
+    """Feature 015 US2: the full definitions of every struct/enum the `callable_api`
+    references, so the model sees their fields BEFORE it constructs them.
+
+    The on-demand lookup already returns struct fields (research.md R2) — but the model
+    constructs the type on attempt 1, before it ever looks up, and invents the fields
+    (observed: a 3-field `TExitUpperBounds` that actually has 5). Surfacing the definitions
+    proactively in the grounding removes the guess. Field types that are themselves a known
+    struct/enum are expanded ONE level (e.g. `TExitParams` inside `TExitUpperBounds`).
+    Detection is a membership test of names the index already knows against the
+    `callable_api` text — no signature-string parsing. Deduped, budget-bounded; reuses each
+    `Symbol.definition`. Returns "" when nothing applies."""
+    if index is None or not callable_api:
+        return ""
+
+    typedefs: dict[str, Symbol] = {}
+    for name, syms in index._symbols.items():
+        for s in syms:
+            if s.kind in ("struct", "enum"):
+                typedefs[name] = s
+                break
+
+    def _mentioned(name: str, text: str) -> bool:
+        return re.search(rf"\b{re.escape(name)}\b", text) is not None
+
+    picked: dict[str, Symbol] = {
+        name: s for name, s in typedefs.items() if _mentioned(name, callable_api)
+    }
+    # one level of nesting: a picked struct's field types that are themselves known
+    for s in list(picked.values()):
+        if s.kind == "struct":
+            for name2, s2 in typedefs.items():
+                if name2 not in picked and _mentioned(name2, s.definition):
+                    picked[name2] = s2
+
+    if not picked:
+        return ""
+    out: list[str] = []
+    total = 0
+    for name, s in picked.items():
+        block = f"// {s.contract} ({s.kind})\n{s.definition}"
+        if total + len(block) > budget:
+            break
+        out.append(block)
+        total += len(block) + 2
+    return "\n\n".join(out)
