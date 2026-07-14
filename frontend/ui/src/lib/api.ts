@@ -108,7 +108,10 @@ export const api = {
   modules: () => fetch("/api/modules").then(j<ModuleDescriptor>),
 
   getModelConfig: () => fetch("/api/model/config").then(j<ModelConfig>),
-  getModelModels: () => fetch("/api/model/models").then(j<{ models: string[]; selected: string }>),
+  getModelModels: () =>
+    fetch("/api/model/models").then(
+      j<{ models: string[]; openrouter: string[]; selected: string }>,
+    ),
   setModelConfig: (b: {
     endpoint?: string;
     model?: string;

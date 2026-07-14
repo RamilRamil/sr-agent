@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from sr_agent.config import config
 from sr_agent.llm_core.gemini_client import SIMPLE_MODELS, GeminiClient
 from sr_agent.llm_core.local_client import DEFAULT_HOST, LocalClient
+from sr_agent.llm_core.openrouter_client import OPENROUTER_MODELS, OpenRouterClient
 
 
 @dataclass
@@ -46,21 +47,30 @@ class ModelConfig:
         """The key to use: the UI-provided one wins over the env key (spec 018)."""
         return self._paid_key or config.gemini_api_key
 
-    def reasoning_client(self) -> LocalClient | GeminiClient:
+    def effective_openrouter_key(self) -> str:
+        """OpenRouter key: UI-provided wins over the env key (spec 020)."""
+        return self._paid_key or config.openrouter_api_key
+
+    def reasoning_client(self) -> LocalClient | GeminiClient | OpenRouterClient:
         """The client the session's reasoning provider runs on. Branches on the
-        EXPLICIT backend — "paid" builds a GeminiClient, never a silent fallback."""
+        EXPLICIT backend — never a silent fallback."""
         if self.backend == "paid":
             return GeminiClient(
                 api_key=self.effective_gemini_key(),
                 model=self.model or SIMPLE_MODELS[0],
             )
+        if self.backend == "openrouter":
+            return OpenRouterClient(
+                api_key=self.effective_openrouter_key(),
+                model=self.model or OPENROUTER_MODELS[0],
+            )
         return self.local_client()
 
-    def additional_client(self) -> LocalClient | GeminiClient | None:
+    def additional_client(self) -> LocalClient | GeminiClient | OpenRouterClient | None:
         """The ADDITIONAL-agent client consulted on escalation (spec 019), or None
         when the slot is off / unconfigured. `None` → escalation falls back to the
-        file relay. "paid" with no effective key is also unconfigured (no silent
-        keyless call)."""
+        file relay. A hosted method with no effective key is also unconfigured (no
+        silent keyless call)."""
         if self.backend == "off":
             return None
         if self.backend == "paid":
@@ -68,6 +78,11 @@ class ModelConfig:
                 return None
             return GeminiClient(api_key=self.effective_gemini_key(),
                                 model=self.model or SIMPLE_MODELS[0])
+        if self.backend == "openrouter":
+            if not self.effective_openrouter_key():
+                return None
+            return OpenRouterClient(api_key=self.effective_openrouter_key(),
+                                    model=self.model or OPENROUTER_MODELS[0])
         return self.local_client()
 
 
@@ -100,14 +115,14 @@ def set_config(endpoint: str | None = None, model: str | None = None,
                backend: str | None = None, paid_key: str | None = None) -> dict:
     """Set the MAIN slot. Reads the live module-global CONFIG (its tests rebind it)."""
     return _apply(CONFIG, endpoint=endpoint, model=model, backend=backend,
-                  paid_key=paid_key, allowed=("local", "paid"))
+                  paid_key=paid_key, allowed=("local", "paid", "openrouter"))
 
 
 def set_additional(endpoint: str | None = None, model: str | None = None,
                    backend: str | None = None, paid_key: str | None = None) -> dict:
     """Set the ADDITIONAL slot — `backend="off"` disables it (relay fallback)."""
     return _apply(ADDITIONAL, endpoint=endpoint, model=model, backend=backend,
-                  paid_key=paid_key, allowed=("local", "paid", "off"))
+                  paid_key=paid_key, allowed=("local", "paid", "openrouter", "off"))
 
 
 # ── Tunnel keep-alive + liveness indicator (US6) ─────────────────────────────

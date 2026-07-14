@@ -11,6 +11,7 @@
   let busy = false;
   let error = "";
   let geminiModels: string[] = []; // populated from /api/model/models
+  let openrouterModels: string[] = []; // OpenRouter tier (GLM), spec 020
 
   // ── Additional agent (consulted automatically on escalation, spec 019) ──────
   let addCfg: ModelConfig | null = null;
@@ -32,8 +33,10 @@
     try {
       const m = await api.getModelModels();
       geminiModels = m.models;
+      openrouterModels = m.openrouter;
     } catch {
       geminiModels = [];
+      openrouterModels = [];
     }
   }
   load();
@@ -96,6 +99,7 @@
       <select bind:value={backend}>
         <option value="local">Local (free, Ollama)</option>
         <option value="paid">Gemini (hosted, explicit opt-in)</option>
+        <option value="openrouter">OpenRouter (GLM, hosted)</option>
       </select>
     </label>
     {#if backend === "local"}
@@ -107,7 +111,7 @@
         <span class="muted">Model (blank → auto-pick a stage-2 model)</span>
         <input bind:value={model} placeholder="e.g. qwen2.5-coder:14b" />
       </label>
-    {:else}
+    {:else if backend === "paid"}
       <label class="stack">
         <span class="muted">Gemini model (simpler/cheaper first)</span>
         <select bind:value={model}>
@@ -119,6 +123,20 @@
       <label class="stack">
         <span class="muted">Gemini API key (held in memory only — never stored or returned; overrides GEMINI_API_KEY)</span>
         <input type="password" bind:value={paidKey} placeholder={cfg?.has_paid_key ? "•••••• (set)" : "AIza…"} />
+      </label>
+    {:else}
+      <label class="stack">
+        <span class="muted">OpenRouter model (GLM)</span>
+        <select bind:value={model}>
+          {#each openrouterModels as m}
+            <option value={m}>{m}</option>
+          {/each}
+        </select>
+      </label>
+      <p class="muted">Key comes from <code>OPENROUTER_API_KEY</code> (env / .env). The field below is an optional override.</p>
+      <label class="stack">
+        <span class="muted">OpenRouter API key (optional; in-memory only, never stored/returned; overrides env)</span>
+        <input type="password" bind:value={paidKey} placeholder={cfg?.has_paid_key ? "•••••• (set)" : "sk-or-…"} />
       </label>
     {/if}
     <div class="row">
@@ -145,6 +163,7 @@
         <option value="off">Off (manual relay hand-off)</option>
         <option value="local">Local (Ollama)</option>
         <option value="paid">Gemini (hosted)</option>
+        <option value="openrouter">OpenRouter (GLM, hosted)</option>
       </select>
     </label>
     {#if addBackend === "local"}
@@ -168,6 +187,19 @@
       <label class="stack">
         <span class="muted">Gemini API key (write-only; overrides GEMINI_API_KEY)</span>
         <input type="password" bind:value={addKey} placeholder={addCfg?.has_paid_key ? "•••••• (set)" : "AIza…"} />
+      </label>
+    {:else if addBackend === "openrouter"}
+      <label class="stack">
+        <span class="muted">OpenRouter model (GLM)</span>
+        <select bind:value={addModel}>
+          {#each openrouterModels as m}
+            <option value={m}>{m}</option>
+          {/each}
+        </select>
+      </label>
+      <label class="stack">
+        <span class="muted">OpenRouter API key (optional; write-only; overrides OPENROUTER_API_KEY)</span>
+        <input type="password" bind:value={addKey} placeholder={addCfg?.has_paid_key ? "•••••• (set)" : "sk-or-…"} />
       </label>
     {/if}
     <div class="row">

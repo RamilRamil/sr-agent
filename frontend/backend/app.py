@@ -17,6 +17,7 @@ from starlette.concurrency import run_in_threadpool
 
 from sr_agent.config import config
 from sr_agent.llm_core.gemini_client import SIMPLE_MODELS
+from sr_agent.llm_core.openrouter_client import OPENROUTER_MODELS
 from sr_agent.memory.episodic import EpisodicMemory
 
 from frontend.backend import confirm, events, model_config, state
@@ -72,9 +73,10 @@ def get_model_config() -> dict:
 
 @app.get("/api/model/models")
 def get_model_models() -> dict:
-    """Selectable Gemini models for the UI dropdown (spec 018). Read-only, no key."""
+    """Selectable hosted models for the UI dropdowns (spec 018/020). Read-only, no key."""
     return {
-        "models": list(SIMPLE_MODELS),
+        "models": list(SIMPLE_MODELS),            # Gemini tier
+        "openrouter": list(OPENROUTER_MODELS),    # OpenRouter tier (GLM first)
         "selected": model_config.CONFIG.model or SIMPLE_MODELS[0],
     }
 
