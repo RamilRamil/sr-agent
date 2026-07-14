@@ -11,6 +11,7 @@
 
   let target = "";  // explicit external target folder — no default (never the agent repo)
   let projectId = "";
+  let auditFile = ""; // optional external audit-report file (spec 019) — reference only
   let text = "";
   let scopeRoot = "";
   let status = "";
@@ -24,7 +25,9 @@
     error = "";
     busy = true;
     try {
-      const s = await api.startSession(target.trim(), projectId.trim() || undefined);
+      const s = await api.startSession(
+        target.trim(), projectId.trim() || undefined, auditFile.trim() || undefined,
+      );
       dispatch("started", { sessionId: s.session_id, projectId: s.project_id });
       scopeRoot = s.scope_root;   // the resolved external target the session is bound to
       status = "active";
@@ -74,6 +77,10 @@
       <label class="stack">
         <span class="muted">External target folder (absolute path — binds the working scope; never the agent repo)</span>
         <input bind:value={target} placeholder="/path/to/target/contracts" />
+      </label>
+      <label class="stack">
+        <span class="muted">Audit file (optional — external report path; reference only, never obeyed)</span>
+        <input bind:value={auditFile} placeholder="/path/to/audit-report.md" />
       </label>
       <label class="stack">
         <span class="muted">Project id (optional — memory namespace)</span>

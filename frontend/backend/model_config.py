@@ -56,24 +56,58 @@ class ModelConfig:
             )
         return self.local_client()
 
+    def additional_client(self) -> LocalClient | GeminiClient | None:
+        """The ADDITIONAL-agent client consulted on escalation (spec 019), or None
+        when the slot is off / unconfigured. `None` → escalation falls back to the
+        file relay. "paid" with no effective key is also unconfigured (no silent
+        keyless call)."""
+        if self.backend == "off":
+            return None
+        if self.backend == "paid":
+            if not self.effective_gemini_key():
+                return None
+            return GeminiClient(api_key=self.effective_gemini_key(),
+                                model=self.model or SIMPLE_MODELS[0])
+        return self.local_client()
 
-# One process-wide config for this single-operator surface.
+
+# Two process-wide slots for this single-operator surface (spec 019):
+#   CONFIG     — the MAIN agent, serves every non-escalated turn (reasoning_client()).
+#   ADDITIONAL — consulted automatically on escalation (additional_client());
+#                "off" by default, so escalation falls back to the file relay.
+# CONFIG keeps its name/behavior from spec 005/018 (its tests rebind it), so
+# set_config below reads the LIVE module global rather than capturing it.
 CONFIG = ModelConfig()
+ADDITIONAL = ModelConfig(backend="off")
+
+
+def _apply(cfg: ModelConfig, *, endpoint, model, backend, paid_key,
+           allowed: tuple[str, ...]) -> dict:
+    if endpoint is not None:
+        cfg.endpoint = endpoint
+    if model is not None:
+        cfg.model = model or None
+    if backend is not None:
+        if backend not in allowed:
+            raise ValueError(f"backend must be one of {allowed}")
+        cfg.backend = backend
+    if paid_key is not None:
+        cfg._paid_key = paid_key or None
+    return cfg.public()
 
 
 def set_config(endpoint: str | None = None, model: str | None = None,
                backend: str | None = None, paid_key: str | None = None) -> dict:
-    if endpoint is not None:
-        CONFIG.endpoint = endpoint
-    if model is not None:
-        CONFIG.model = model or None
-    if backend is not None:
-        if backend not in ("local", "paid"):
-            raise ValueError("backend must be 'local' or 'paid'")
-        CONFIG.backend = backend
-    if paid_key is not None:
-        CONFIG._paid_key = paid_key or None
-    return CONFIG.public()
+    """Set the MAIN slot. Reads the live module-global CONFIG (its tests rebind it)."""
+    return _apply(CONFIG, endpoint=endpoint, model=model, backend=backend,
+                  paid_key=paid_key, allowed=("local", "paid"))
+
+
+def set_additional(endpoint: str | None = None, model: str | None = None,
+                   backend: str | None = None, paid_key: str | None = None) -> dict:
+    """Set the ADDITIONAL slot — `backend="off"` disables it (relay fallback)."""
+    return _apply(ADDITIONAL, endpoint=endpoint, model=model, backend=backend,
+                  paid_key=paid_key, allowed=("local", "paid", "off"))
 
 
 # ── Tunnel keep-alive + liveness indicator (US6) ─────────────────────────────

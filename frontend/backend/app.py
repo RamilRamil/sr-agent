@@ -90,6 +90,23 @@ def post_model_config(body: dict) -> dict:
         raise HTTPException(400, str(e))
 
 
+@app.get("/api/model/additional")
+def get_model_additional() -> dict:
+    """The ADDITIONAL-agent slot (spec 019) — never returns the key."""
+    return model_config.ADDITIONAL.public()
+
+
+@app.post("/api/model/additional")
+def post_model_additional(body: dict) -> dict:
+    try:
+        return model_config.set_additional(
+            endpoint=body.get("endpoint"), model=body.get("model"),
+            backend=body.get("backend"), paid_key=body.get("paid_key"),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/model/warm")
 async def post_warm() -> dict:
     return await run_in_threadpool(model_config.warm)
@@ -105,13 +122,15 @@ def get_heartbeat() -> dict:
 @app.post("/api/session")
 def post_session(body: dict) -> dict:
     try:
-        s = _manager.start(body.get("project_path", ""), body.get("project_id"))
+        s = _manager.start(body.get("project_path", ""), body.get("project_id"),
+                           audit_path=body.get("audit_path") or None)
     except ValueError as e:
         raise HTTPException(400, str(e))  # explicit external path required
     return {
         "session_id": s.chat.session_id,
         "project_id": s.chat.principal.project_id,
         "scope_root": str(s.loop._audit_root),
+        "has_report": s.loop._session_facts_provider is not None,
     }
 
 

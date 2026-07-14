@@ -115,12 +115,20 @@ export const api = {
     backend?: string;
     paid_key?: string;
   }) => post("/api/model/config", b).then(j<ModelConfig>),
+  // Additional-agent slot (spec 019) — consulted automatically on escalation.
+  getAdditional: () => fetch("/api/model/additional").then(j<ModelConfig>),
+  setAdditional: (b: {
+    endpoint?: string;
+    model?: string;
+    backend?: string;
+    paid_key?: string;
+  }) => post("/api/model/additional", b).then(j<ModelConfig>),
   warm: () => post("/api/model/warm", {}).then(j<WarmResult>),
   heartbeat: () => fetch("/api/model/heartbeat").then(j<Heartbeat>),
 
-  startSession: (project_path: string, project_id?: string) =>
-    post("/api/session", { project_path, project_id }).then(
-      j<{ session_id: string; project_id: string; scope_root: string }>,
+  startSession: (project_path: string, project_id?: string, audit_path?: string) =>
+    post("/api/session", { project_path, project_id, audit_path }).then(
+      j<{ session_id: string; project_id: string; scope_root: string; has_report: boolean }>,
     ),
   getSession: (id: string) => fetch(`/api/session/${id}`).then(j<SessionView>),
   sendMessage: (id: string, text: string) =>
