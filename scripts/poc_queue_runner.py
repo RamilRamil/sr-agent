@@ -1404,6 +1404,27 @@ def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: s
 _FAIL_LINE_RE = re.compile(r"\[FAIL[:.][^\n]*")
 
 
+_ALLOWANCE_REVERT_RE = re.compile(r"ERC20InsufficientAllowance\((0x[0-9a-fA-F]+),\s*\d+,\s*(\d+)")
+
+
+def _setup_revert_hints(blob: str) -> str:
+    """Deterministic, AUTHORITATIVE fixes for standard exploit-SETUP reverts the generic
+    exploit-logic feedback doesn't name specifically. Live H-01 run (2026-07-14): the local
+    model wrote a correct same-block-padding exploit that COMPILED and ran on a mainnet fork,
+    reverting only on `ERC20InsufficientAllowance` — a missing token approval before a
+    redeem/transfer. The revert names the spender + amount, so the fix is exact."""
+    hints: list[str] = []
+    for spender, needed in _ALLOWANCE_REVERT_RE.findall(blob):
+        hints.append(
+            f"REVERT `ERC20InsufficientAllowance`: a token transfer needs approval FIRST. The "
+            f"account that owns the tokens must approve spender `{spender}` for at least {needed} "
+            f"BEFORE the failing call — add, before that call: `vm.prank(<the account being "
+            f"debited>); IERC20(<the token being pulled>).approve({spender}, type(uint256).max);`. "
+            f"The token is usually the vault's asset or share token; the owner is the account "
+            f"doing the redeem/deposit.")
+    return "\n".join(dict.fromkeys(hints))
+
+
 def revert_hints(stdout: str, stderr: str, task: dict) -> str:
     """The test COMPILED and RAN but did not pass — a genuine execution failure
     (wrong revert, no revert where the finding expects one, or an assertion that
@@ -1412,10 +1433,12 @@ def revert_hints(stdout: str, stderr: str, task: dict) -> str:
     EXPLOIT's own logic against the finding's own description. Quote forge's actual
     [FAIL...] line(s) plus the finding text so the model re-derives the trigger
     condition instead of guessing again from scratch."""
-    fails = _FAIL_LINE_RE.findall(stdout + "\n" + stderr)
+    blob = stdout + "\n" + stderr
+    fails = _FAIL_LINE_RE.findall(blob)
     if not fails:
         return ""
-    return (
+    setup = _setup_revert_hints(blob)
+    generic = (
         "The test compiled and ran, but did NOT pass — this is an EXPLOIT-LOGIC problem, "
         "not a compile error:\n" + "\n".join(dict.fromkeys(fails))[:800] +
         f"\n\nRe-read the finding and fix the SEQUENCE/PRECONDITIONS, not just syntax:\n"
@@ -1425,6 +1448,9 @@ def revert_hints(stdout: str, stderr: str, task: dict) -> str:
         "asserting the wrong condition, or expecting a revert that the real code doesn't "
         "produce at that call (check which call in the sequence should actually revert)."
     )
+    # An authoritative setup-revert fix (e.g. missing approve) goes FIRST — it's exact,
+    # not a re-think-the-logic nudge.
+    return f"{setup}\n\n{generic}" if setup else generic
 
 
 # ── Mutation-based PASS verification (feature 010) ────────────────────────────
