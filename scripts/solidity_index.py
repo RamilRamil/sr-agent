@@ -182,6 +182,20 @@ class SymbolIndex:
             matches = list(self._symbols.get(bare, []))
         return matches
 
+    def nested_container(self, name: str) -> str | None:
+        """The containing contract/interface iff `name` is UNAMBIGUOUSLY a nested struct/enum
+        (feature 016): ≥1 struct/enum match with a non-empty container, NO top-level match,
+        and exactly one distinct container. Otherwise None. This is the strict determinism
+        boundary — the nested-import guard/grounding/hint touch ONLY names this resolves, so a
+        top-level or ambiguous name is never falsely rewritten."""
+        types = [m for m in self.lookup(name) if m.kind in ("struct", "enum")]
+        if not types:
+            return None
+        if any(not m.contract for m in types):   # a top-level declaration exists → not nested
+            return None
+        containers = {m.contract for m in types}
+        return next(iter(containers)) if len(containers) == 1 else None
+
     def functions_in_file(self, path: Path) -> list[Symbol]:
         """Every function Symbol declared directly in `path` — grammar-accurate
         replacement for `poc_queue_runner.py`'s old per-file regex signature scan
@@ -330,6 +344,12 @@ def expand_referenced_types(callable_api: str, index: "SymbolIndex | None",
     total = 0
     for name, s in picked.items():
         block = f"// {s.contract} ({s.kind})\n{s.definition}"
+        if s.contract:
+            # Feature 016 US2: same canonical wording as the on-demand lookup response, so the
+            # model sees the fields AND how to reference a nested type together, up front.
+            block += (f"\n// NOTE: {s.name} is nested inside {s.contract} — do NOT write "
+                      f"`import {{ {s.name} }} from ...;`. Import {s.contract} and reference "
+                      f"the type as {s.contract}.{s.name}.")
         if total + len(block) > budget:
             break
         out.append(block)

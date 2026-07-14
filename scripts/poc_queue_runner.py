@@ -1113,6 +1113,78 @@ def _fix_import_paths(code: str, project: Path) -> tuple[str, bool]:
     return "\n".join(out), changed
 
 
+_NAMED_IMPORT_RE = re.compile(r'import\s*\{([^}]*)\}\s*from\s*["\']([^"\']+)["\']\s*;')
+
+
+def _fix_nested_type_imports(code: str, symbol_index, file_map: str = "") -> tuple[str, bool]:
+    """Feature 016: deterministically fix a named-import of a NESTED struct/enum type — the
+    mistake the model repeats even with the right lesson in context (Error 2904). For any name
+    the index knows is nested (`SymbolIndex.nested_container`), (a) remove it from the
+    named-import, (b) ensure its container is imported, and (c) rewrite its BARE uses in the
+    body to `Container.Type` (required: the model uses these types bare, so removing only the
+    import would leave an undefined identifier). Touches ONLY unambiguously-nested names; leaves
+    library/remapped/aliased/top-level/unknown imports and already-qualified uses alone.
+    Returns (code, changed); idempotent. Mirrors `_fix_import_paths`' line-by-line safety."""
+    if symbol_index is None:
+        return code, False
+    removed: dict[str, tuple[str, str]] = {}   # nested name -> (container, its import path)
+    out: list[str] = []
+    changed = False
+    for line in code.splitlines():
+        m = _NAMED_IMPORT_RE.match(line.strip())
+        if not m:
+            out.append(line)
+            continue
+        path = m.group(2)
+        if path.startswith("@") or path.startswith("forge-std"):
+            out.append(line)
+            continue
+        names = [n.strip() for n in m.group(1).split(",") if n.strip()]
+        keep: list[str] = []
+        for n in names:
+            container = None if " as " in n else symbol_index.nested_container(n)
+            if container:
+                removed[n] = (container, path)
+            else:
+                keep.append(n)
+        if len(keep) == len(names):
+            out.append(line)
+        else:
+            changed = True
+            if keep:
+                indent = line[: len(line) - len(line.lstrip())]
+                out.append(f'{indent}import {{ {", ".join(keep)} }} from "{path}";')
+            # else: drop the line entirely (all names were nested)
+    if not removed:
+        return code, False
+    # ensure each container is imported (dedup against names already imported anywhere)
+    imported = set()
+    for line in out:
+        mm = _NAMED_IMPORT_RE.match(line.strip())
+        if mm:
+            imported.update(n.strip() for n in mm.group(1).split(","))
+    additions: list[str] = []
+    for container, orig_path in {c: p for c, p in removed.values()}.items():
+        if container in imported:
+            continue
+        cpath = _path_for(file_map, container) or orig_path
+        additions.append(f'import {{ {container} }} from "{cpath}";')
+        imported.add(container)
+    if additions:
+        insert_at = 0
+        for i, line in enumerate(out):
+            s = line.strip()
+            if s.startswith("import") or s.startswith("pragma"):
+                insert_at = i + 1
+        out = out[:insert_at] + additions + out[insert_at:]
+    code2 = "\n".join(out)
+    # rewrite BARE uses of each removed nested type → Container.Type (skip already-qualified)
+    for name, (container, _p) in removed.items():
+        pat = re.compile(rf'(?<![.\w]){re.escape(name)}\b')
+        code2 = pat.sub(f"{container}.{name}", code2)
+    return code2, True
+
+
 _ASSERT_RE = re.compile(
     r"\b(assertEq|assertTrue|assertFalse|assertGt|assertGe|assertLt|assertLe|"
     r"assertNotEq|assertApproxEqAbs|expectRevert|expectEmit)\b"
@@ -1235,13 +1307,25 @@ def _line_level_hints(forge_output: str, code: str, callable_api: str) -> list[s
     return out
 
 
-def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: str = "") -> str:
+def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: str = "",
+                    symbol_index=None) -> str:
     """Turn each compiler error into an AUTHORITATIVE, specific fix by resolving it
     against ground truth (real signatures + real paths). The compiler says exactly
     what's wrong; we know exactly what's right — connect the two so the repair is a
     precise instruction, not a hope."""
     hints: list[str] = []
     hints.extend(_line_level_hints(forge_output, code, callable_api))
+    # 2904 — a nested struct/enum named-imported / referenced without its container (feature
+    # 016). Only fire when the index confirms the name is nested — never mislead on an
+    # invented name (that stays with the 6275/"not a real symbol" handling below).
+    if symbol_index is not None:
+        for decl in re.findall(r'Declaration "(\w+)" not found', forge_output):
+            container = symbol_index.nested_container(decl)
+            if container:
+                hints.append(
+                    f"`{decl}` is a NESTED type declared inside `{container}` — remove any "
+                    f"`import {{ {decl} }} from ...;`, import `{container}`, and reference it "
+                    f"as `{container}.{decl}` everywhere.")
     # 9582 — member not found on a contract → list that contract's real functions
     for member, contract in re.findall(
             r'Member "(\w+)" not found[^.]*?in contract (\w+)', forge_output):
@@ -1911,6 +1995,9 @@ def _process_finding(
     code, ip_changed = _fix_import_paths(code, args.project)
     if ip_changed:
         log({"event": "postfix_imports", "finding_id": fid, "stage": "draft"})
+    code, nested_changed = _fix_nested_type_imports(code, symbol_index, file_map)
+    if nested_changed:
+        log({"event": "postfix_nested_import", "finding_id": fid, "stage": "draft"})
 
     outcome = "unknown"
     res = None
@@ -1995,7 +2082,8 @@ def _process_finding(
             "\n\nSTRUCTURAL PROBLEMS — the test builds but proves nothing; fix ALL:\n- "
             + "\n- ".join(defects) if defects else ""
         )
-        hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map, code)
+        hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map, code,
+                                symbol_index)
         hint_note = f"\n\nTARGETED FIXES (authoritative — apply exactly):\n{hints}" if hints else ""
         revert_note = ""
         if compiled and not hints and not defects:
@@ -2058,6 +2146,9 @@ def _process_finding(
         code, ip_changed = _fix_import_paths(code, args.project)
         if ip_changed:
             log({"event": "postfix_imports", "finding_id": fid, "stage": f"fix{attempt}"})
+        code, nested_changed = _fix_nested_type_imports(code, symbol_index, file_map)
+        if nested_changed:
+            log({"event": "postfix_nested_import", "finding_id": fid, "stage": f"fix{attempt}"})
 
     # `forge test --match-path` only selects which tests RUN, not which
     # files get COMPILED — every *.t.sol under FOUNDRY_TEST is compiled as
