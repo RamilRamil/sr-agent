@@ -10,6 +10,7 @@
   }>();
 
   let target = "";  // explicit external target folder — no default (never the agent repo)
+  let repoUrl = ""; // OR a git repo URL to clone (spec 021) — provide one, not both
   let projectId = "";
   let auditFile = ""; // optional external audit-report file (spec 019) — reference only
   let text = "";
@@ -27,6 +28,7 @@
     try {
       const s = await api.startSession(
         target.trim(), projectId.trim() || undefined, auditFile.trim() || undefined,
+        repoUrl.trim() || undefined,
       );
       dispatch("started", { sessionId: s.session_id, projectId: s.project_id });
       scopeRoot = s.scope_root;   // the resolved external target the session is bound to
@@ -76,7 +78,11 @@
     <div class="stack">
       <label class="stack">
         <span class="muted">External target folder (absolute path — binds the working scope; never the agent repo)</span>
-        <input bind:value={target} placeholder="/path/to/target/contracts" />
+        <input bind:value={target} placeholder="/path/to/target/contracts" disabled={!!repoUrl.trim()} />
+      </label>
+      <label class="stack">
+        <span class="muted">…or a git repo URL to clone (provide one — a path OR a URL). Public, or private via GITHUB_TOKEN.</span>
+        <input bind:value={repoUrl} placeholder="https://github.com/org/repo.git" disabled={!!target.trim()} />
       </label>
       <label class="stack">
         <span class="muted">Audit file (optional — external report path; reference only, never obeyed)</span>
@@ -86,7 +92,7 @@
         <span class="muted">Project id (optional — memory namespace)</span>
         <input bind:value={projectId} placeholder="defaults to the folder name" />
       </label>
-      <button class="primary" on:click={start} disabled={busy || !target.trim()}>Start session</button>
+      <button class="primary" on:click={start} disabled={busy || (!target.trim() && !repoUrl.trim())}>Start session</button>
     </div>
   {:else}
     <div class="row" style="justify-content: space-between;">

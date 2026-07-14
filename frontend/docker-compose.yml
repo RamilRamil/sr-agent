@@ -18,18 +18,26 @@ services:
       SR_MEMORY_ROOT: /data/memory
       SR_CONFIRMATIONS_ROOT: /data/confirmations
       SR_RELAY_ROOT: /data/relay
-      # Optional hosted-model keys (specs 018/020) — passed from the host env / .env.
-      # Empty by default; the core loop runs without them (Constitution V).
+      # Cloned git-URL targets land here (spec 021) — external to /app (the agent
+      # repo), persisted in the data volume; session scope for a repo-URL target.
+      SR_WORKSPACES_ROOT: /data/workspaces
+      # Optional hosted-model keys (specs 018/020) + git token for PRIVATE target
+      # repos (spec 021) — passed from the host env / .env. Empty by default; the
+      # core loop runs without them (Constitution V). Write-only secrets.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
       # DockerSandbox spawns network-isolated PoC containers on the host daemon.
       - /var/run/docker.sock:/var/run/docker.sock
-      # Persist memory / confirmations / relay across restarts.
+      # Persist memory / confirmations / relay / workspaces across restarts.
       - sr_frontend_data:/data
       # Mount audit targets OUTSIDE /app (the agent repo root in-container) so the
       # session's external-target guard accepts them. Session path = /targets/<name>.
       - ./targets:/targets:ro
+      # Optional: expose a host projects dir for Docker PATH mode (spec 021). Then
+      # paste /projects/<name> as the target path. (Repo-URL mode needs no mount.)
+      # - ${HOST_PROJECTS:-./projects}:/projects:ro
     extra_hosts:
       # Lets the default endpoint reach a host-run Ollama.
       - "host.docker.internal:host-gateway"

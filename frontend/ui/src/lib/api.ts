@@ -129,8 +129,10 @@ export const api = {
   warm: () => post("/api/model/warm", {}).then(j<WarmResult>),
   heartbeat: () => fetch("/api/model/heartbeat").then(j<Heartbeat>),
 
-  startSession: (project_path: string, project_id?: string, audit_path?: string) =>
-    post("/api/session", { project_path, project_id, audit_path }).then(
+  startSession: (
+    project_path: string, project_id?: string, audit_path?: string, repo_url?: string,
+  ) =>
+    post("/api/session", { project_path, project_id, audit_path, repo_url }).then(
       j<{ session_id: string; project_id: string; scope_root: string; has_report: boolean }>,
     ),
   getSession: (id: string) => fetch(`/api/session/${id}`).then(j<SessionView>),

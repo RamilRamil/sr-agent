@@ -23,6 +23,7 @@ from sr_agent.packs.audit.reasoning import AUDIT_CHAT_SYSTEM, signal_from
 from sr_agent.packs.audit.session import AuditInput, AuditSession
 
 from frontend.backend import events
+from frontend.backend.clone import CloneError, clone_repo, validate_repo_url
 from frontend.backend.model_config import ADDITIONAL, CONFIG
 
 # Test seam: override to inject a fake reasoning provider (drive a turn w/o Ollama).
@@ -64,14 +65,23 @@ class SessionManager:
         self._memory = memory
         self._sessions: dict[str, Session] = {}
 
-    def start(self, project_path: str, project_id: str | None = None,
-              audit_path: str | None = None) -> Session:
-        # The target is ALWAYS an explicit, existing, EXTERNAL folder. No silent
-        # fallback to "." — that would scope the session at the agent's own repo,
-        # letting it read/write its own tree and mixing target code into the agent
-        # (see memory feedback_no_target_code_in_agent).
-        if not project_path or not str(project_path).strip():
-            raise ValueError("project path is required (the external target folder)")
+    def start(self, project_path: str | None = None, project_id: str | None = None,
+              audit_path: str | None = None, repo_url: str | None = None) -> Session:
+        # The target is ALWAYS an explicit, existing, EXTERNAL folder — either a
+        # pasted path or a git URL cloned into an external workspace (spec 021).
+        # Exactly one input; never a silent fallback to "." (that would scope the
+        # session at the agent's own repo — see feedback_no_target_code_in_agent).
+        has_path = bool(project_path and str(project_path).strip())
+        has_url = bool(repo_url and str(repo_url).strip())
+        if has_path == has_url:  # both or neither
+            raise ValueError("provide exactly one of a target path or a repository URL")
+        if has_url:
+            try:
+                url = validate_repo_url(repo_url)
+                workspace = clone_repo(url, config.workspaces_root, config.git_token)
+            except CloneError as e:
+                raise ValueError(str(e)) from e   # clear message; carries no token
+            project_path = str(workspace)
         p = Path(project_path).expanduser()
         if not p.is_dir():
             raise ValueError(f"project path is not an existing directory: {project_path}")

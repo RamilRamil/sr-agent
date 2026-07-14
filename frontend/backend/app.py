@@ -124,8 +124,9 @@ def get_heartbeat() -> dict:
 @app.post("/api/session")
 def post_session(body: dict) -> dict:
     try:
-        s = _manager.start(body.get("project_path", ""), body.get("project_id"),
-                           audit_path=body.get("audit_path") or None)
+        s = _manager.start(body.get("project_path") or None, body.get("project_id"),
+                           audit_path=body.get("audit_path") or None,
+                           repo_url=body.get("repo_url") or None)
     except ValueError as e:
         raise HTTPException(400, str(e))  # explicit external path required
     return {
