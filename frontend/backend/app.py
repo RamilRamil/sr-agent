@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 from sr_agent.config import config
+from sr_agent.llm_core.gemini_client import SIMPLE_MODELS
 from sr_agent.memory.episodic import EpisodicMemory
 
 from frontend.backend import confirm, events, model_config, state
@@ -67,6 +68,15 @@ def get_modules() -> dict:
 @app.get("/api/model/config")
 def get_model_config() -> dict:
     return model_config.CONFIG.public()  # never returns the key
+
+
+@app.get("/api/model/models")
+def get_model_models() -> dict:
+    """Selectable Gemini models for the UI dropdown (spec 018). Read-only, no key."""
+    return {
+        "models": list(SIMPLE_MODELS),
+        "selected": model_config.CONFIG.model or SIMPLE_MODELS[0],
+    }
 
 
 @app.post("/api/model/config")

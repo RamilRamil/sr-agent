@@ -9,12 +9,19 @@
   let warm: WarmResult | null = null;
   let busy = false;
   let error = "";
+  let geminiModels: string[] = []; // populated from /api/model/models
 
   async function load() {
     cfg = await api.getModelConfig();
     endpoint = cfg.endpoint;
     model = cfg.model ?? "";
     backend = cfg.backend;
+    try {
+      const m = await api.getModelModels();
+      geminiModels = m.models;
+    } catch {
+      geminiModels = [];
+    }
   }
   load();
 
@@ -59,20 +66,29 @@
       <input bind:value={endpoint} placeholder="http://localhost:11434" />
     </label>
     <label class="stack">
-      <span class="muted">Model (blank → auto-pick a stage-2 model)</span>
-      <input bind:value={model} placeholder="e.g. qwen2.5-coder:14b" />
-    </label>
-    <label class="stack">
       <span class="muted">Backend (explicit — the paid backend is never a silent fallback)</span>
       <select bind:value={backend}>
-        <option value="local">local (free, Ollama)</option>
-        <option value="paid">paid (explicit opt-in)</option>
+        <option value="local">Local (free, Ollama)</option>
+        <option value="paid">Gemini (hosted, explicit opt-in)</option>
       </select>
     </label>
-    {#if backend === "paid"}
+    {#if backend === "local"}
       <label class="stack">
-        <span class="muted">Paid API key (held in memory only — never stored or returned)</span>
-        <input type="password" bind:value={paidKey} placeholder={cfg?.has_paid_key ? "•••••• (set)" : "sk-…"} />
+        <span class="muted">Model (blank → auto-pick a stage-2 model)</span>
+        <input bind:value={model} placeholder="e.g. qwen2.5-coder:14b" />
+      </label>
+    {:else}
+      <label class="stack">
+        <span class="muted">Gemini model (simpler/cheaper first)</span>
+        <select bind:value={model}>
+          {#each geminiModels as m}
+            <option value={m}>{m}</option>
+          {/each}
+        </select>
+      </label>
+      <label class="stack">
+        <span class="muted">Gemini API key (held in memory only — never stored or returned; overrides GEMINI_API_KEY)</span>
+        <input type="password" bind:value={paidKey} placeholder={cfg?.has_paid_key ? "•••••• (set)" : "AIza…"} />
       </label>
     {/if}
     <div class="row">

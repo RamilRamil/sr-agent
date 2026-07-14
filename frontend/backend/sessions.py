@@ -78,7 +78,7 @@ class SessionManager:
             provider = provider_factory()
         else:
             provider = ChatReasoningProvider(
-                local=CONFIG.local_client(), session=audit_session, relay_dir=config.relay_root,
+                local=CONFIG.reasoning_client(), session=audit_session, relay_dir=config.relay_root,
                 system_prompt=AUDIT_CHAT_SYSTEM, signal_from=signal_from,
                 domain_escalation=domain_escalation,
             )

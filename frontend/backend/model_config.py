@@ -11,15 +11,20 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from sr_agent.config import config
+from sr_agent.llm_core.gemini_client import SIMPLE_MODELS, GeminiClient
 from sr_agent.llm_core.local_client import DEFAULT_HOST, LocalClient
 
 
 @dataclass
 class ModelConfig:
     endpoint: str = DEFAULT_HOST          # LocalClient(host=…) — localhost or a tunnel
-    model: str | None = None              # None → for_stage2() picks
-    backend: str = "local"                # "local" | "paid" — EXPLICIT operator choice
-    _paid_key: str | None = None          # never returned/persisted/logged
+    model: str | None = None              # None → for_stage2() (local) / SIMPLE_MODELS[0] (gemini)
+    backend: str = "local"                # "local" | "paid" — EXPLICIT operator choice.
+    # "paid" builds a GeminiClient — the only paid provider today (spec 018); the
+    # UI labels it "Gemini". Kept as "paid" so the generic explicit-paid-selection
+    # invariant (and its tests) stay intact.
+    _paid_key: str | None = None          # UI Gemini key; overrides env; never returned/logged
 
     def public(self) -> dict:
         """Serializable view — the secret is write-only (only `has_paid_key`)."""
@@ -36,6 +41,20 @@ class ModelConfig:
         if self.model:
             return LocalClient(model=self.model, host=self.endpoint)
         return LocalClient.for_stage2(host=self.endpoint)
+
+    def effective_gemini_key(self) -> str:
+        """The key to use: the UI-provided one wins over the env key (spec 018)."""
+        return self._paid_key or config.gemini_api_key
+
+    def reasoning_client(self) -> LocalClient | GeminiClient:
+        """The client the session's reasoning provider runs on. Branches on the
+        EXPLICIT backend — "paid" builds a GeminiClient, never a silent fallback."""
+        if self.backend == "paid":
+            return GeminiClient(
+                api_key=self.effective_gemini_key(),
+                model=self.model or SIMPLE_MODELS[0],
+            )
+        return self.local_client()
 
 
 # One process-wide config for this single-operator surface.

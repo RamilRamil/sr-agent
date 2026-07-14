@@ -34,6 +34,12 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",
 ]
+# Optional paid provider (spec 018). NOT a runtime dependency — the core loop
+# runs on the local model / relay without it (Constitution V). GeminiClient
+# imports it lazily and errors clearly if it's absent.
+gemini = [
+    "google-genai>=1.0.0",
+]
 
 [project.scripts]
 sr-agent = "sr_agent.cli:cli"
