@@ -638,8 +638,35 @@ def resolve_scaffold(project: Path, spec: str, disabled: bool,
     return []
 
 
+# A real contract DECLARATION only — `contract Name is …` or `contract Name {` — never the
+# bare word "contract" inside a comment/string (a 2026-07-14 bug: an assert message
+# "...contract should be configured..." matched `contract should` and the guard forced
+# `is should`). Comments are stripped first; the name must be followed by `is` or `{`.
+_SCAFFOLD_CONTRACT_RE = re.compile(r"\b(?:abstract\s+)?contract\s+(\w+)\s*(?:is\b|\{)")
+_SCAFFOLD_IS_RE = re.compile(r"\bcontract\s+\w+\s+is\s+([^{]+?)\s*\{")
+
+
+def _scaffold_base_name(text: str) -> str | None:
+    """The concrete LEAF contract to inherit from a test_scaffold file — the contract
+    DECLARED in it that is not itself a base of another in-file contract (e.g. `SIP2Test`,
+    NOT the imported `NeutrlDeploy` it extends). Live H-01 run (2026-07-14): given the raw
+    scaffold file, the model inherited the grandparent base and lost setUp + all the deployed
+    state (`sharesCooldown`, the exit constants) → a cascade of `Undeclared identifier`. The
+    leaf is what actually has setUp + the state; Solidity convention puts bases first, leaf last."""
+    text = _strip_comments(text or "")
+    decls = _SCAFFOLD_CONTRACT_RE.findall(text)
+    if not decls:
+        return None
+    used_as_base: set[str] = set()
+    for bases in _SCAFFOLD_IS_RE.findall(text):
+        used_as_base.update(b.strip() for b in bases.split(","))
+    leaves = [n for n in decls if n not in used_as_base]
+    return leaves[-1] if leaves else decls[-1]
+
+
 def read_scaffold(project: Path, paths: list[Path]) -> str:
-    """Render scaffold file(s) as DATA blocks with the exact import path to inherit."""
+    """Render scaffold file(s) as DATA blocks with the exact import path AND the exact leaf
+    contract to inherit (not a `<BaseName>` placeholder the model has to guess)."""
     if not paths:
         return ""
     poc_dir = project / POC_SUBDIR
@@ -650,7 +677,11 @@ def read_scaffold(project: Path, paths: list[Path]) -> str:
         text = p.read_text(encoding="utf-8", errors="replace")[:budget]
         budget -= len(text)
         imp = os.path.relpath(p, poc_dir)
-        blocks.append(f'// [test_scaffold] the project\'s PoC base — INHERIT it; import as: "{imp}"\n{text}')
+        base = _scaffold_base_name(text)
+        inherit = (f'INHERIT the contract `{base}` (write `is {base}` — that is the leaf that '
+                   f'has setUp + the deployed state; do NOT inherit a base it extends)'
+                   if base else "INHERIT it")
+        blocks.append(f'// [test_scaffold] the project\'s PoC base — {inherit}; import as: "{imp}"\n{text}')
     return "\n\n".join(blocks)
 
 
@@ -1183,6 +1214,26 @@ def _fix_nested_type_imports(code: str, symbol_index, file_map: str = "") -> tup
         pat = re.compile(rf'(?<![.\w]){re.escape(name)}\b')
         code2 = pat.sub(f"{container}.{name}", code2)
     return code2, True
+
+
+def _fix_scaffold_base(code: str, scaffold_text: str) -> tuple[str, bool]:
+    """When a test_scaffold is provided, force the PoC to inherit ITS leaf base. Live H-01
+    run (2026-07-14): the model wrote a coherent, right-mechanism exploit but inherited the
+    imported grandparent (`NeutrlDeploy`) instead of the scaffold's leaf (`SIP2Test`), losing
+    setUp + every deployed symbol → `Undeclared identifier`. Deterministic (spec-016 lesson:
+    the model doesn't always obey the grounding). Only rewrites when a scaffold leaf is known
+    and the PoC's inheritance list doesn't already contain it. Returns (code, changed)."""
+    leaf = _scaffold_base_name(scaffold_text or "")
+    if not leaf:
+        return code, False
+    matches = list(re.finditer(r"(contract\s+\w+\s+is\s+)([^{]+?)(\s*\{)", code))
+    if not matches:
+        return code, False
+    m = matches[-1]   # the PoC contract — conventionally the last declared
+    current_bases = [b.strip() for b in m.group(2).split(",")]
+    if leaf in current_bases:
+        return code, False
+    return code[:m.start(2)] + leaf + code[m.end(2):], True
 
 
 _ASSERT_RE = re.compile(
@@ -1998,6 +2049,9 @@ def _process_finding(
     code, nested_changed = _fix_nested_type_imports(code, symbol_index, file_map)
     if nested_changed:
         log({"event": "postfix_nested_import", "finding_id": fid, "stage": "draft"})
+    code, base_changed = _fix_scaffold_base(code, scaffold)
+    if base_changed:
+        log({"event": "postfix_scaffold_base", "finding_id": fid, "stage": "draft"})
 
     outcome = "unknown"
     res = None
@@ -2149,6 +2203,9 @@ def _process_finding(
         code, nested_changed = _fix_nested_type_imports(code, symbol_index, file_map)
         if nested_changed:
             log({"event": "postfix_nested_import", "finding_id": fid, "stage": f"fix{attempt}"})
+        code, base_changed = _fix_scaffold_base(code, scaffold)
+        if base_changed:
+            log({"event": "postfix_scaffold_base", "finding_id": fid, "stage": f"fix{attempt}"})
 
     # `forge test --match-path` only selects which tests RUN, not which
     # files get COMPILED — every *.t.sol under FOUNDRY_TEST is compiled as
