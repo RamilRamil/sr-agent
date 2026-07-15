@@ -40,7 +40,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from sr_agent.llm_core.gemini_client import SIMPLE_MODELS, GeminiClient
 from sr_agent.llm_core.local_client import LocalClient, ModelUnavailableError
+from sr_agent.llm_core.openrouter_client import OPENROUTER_MODELS, OpenRouterClient
 from sr_agent.tools.sandbox import DockerSandbox, SandboxUnavailable
 from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
@@ -53,6 +55,50 @@ from scripts.solidity_index import SymbolIndex, expand_referenced_types
 # No audited/bug-bounty target is ever hardcoded here — this harness is generic.
 POC_SUBDIR = "audit/poc"            # PoCs live here; needs FOUNDRY_TEST override
 MODEL = "qwen2.5-coder:7b"          # 7b is far more reliable at code than 3b
+
+# The batch can be driven by the local Ollama model (default) or, opt-in, a capable
+# HOSTED model on the marker protocol (spec 022). All three share generate()/ready();
+# the marker path uses only generate(). Hosted key comes from env, never argv/log.
+GenClient = LocalClient | OpenRouterClient | GeminiClient
+
+
+class ProviderStartupError(Exception):
+    """A hosted provider was misconfigured at startup (bad protocol request)."""
+
+
+def build_generation_client(provider: str, model: str, host: str, timeout: float) -> GenClient:
+    """Build the client that drives the batch. Empty `model` → the provider default."""
+    if provider == "openrouter":
+        return OpenRouterClient(api_key=os.environ.get("OPENROUTER_API_KEY", ""),
+                                model=model or OPENROUTER_MODELS[0])
+    if provider == "gemini":
+        return GeminiClient(api_key=os.environ.get("GEMINI_API_KEY", ""),
+                            model=model or SIMPLE_MODELS[0])
+    return LocalClient(model=model or MODEL, host=host, timeout_s=timeout)
+
+
+def resolve_lookup_protocol(provider: str, requested: str) -> str:
+    """Local: pass through. Hosted: force 'marker' (no tool-calling); an explicit
+    'tool' request is a clear startup error, not a silent downgrade. The result is
+    fed to `_select_protocol`, so a hosted client never hits its supports_tools() branch."""
+    if provider == "local":
+        return requested
+    if requested == "tool":
+        raise ProviderStartupError(
+            f"provider '{provider}' has no tool-calling — use --lookup-protocol marker"
+        )
+    return "marker"
+
+
+def hosted_ready_error(provider: str, client: GenClient) -> str | None:
+    """None if the hosted client is ready; else a clear, actionable message. No network."""
+    key = getattr(client, "api_key", "")
+    if not key:
+        env = "OPENROUTER_API_KEY" if provider == "openrouter" else "GEMINI_API_KEY"
+        return f"no {env} configured for provider '{provider}'"
+    if not client.ready():   # key present but not ready → gemini SDK missing
+        return "Gemini selected but google-genai is not installed — pip install '.[gemini]'"
+    return None
 NUM_CTX = 32768                     # base + source + file-map + example; 32b on T4x2 handles it
 MAX_ATTEMPTS = 3                    # draft + up to 2 repairs
 RUN_TIMEOUT_S = 600.0              # cold `forge` compile of the whole project is slow
@@ -394,7 +440,7 @@ def _extract_solidity(text: str) -> str:
     return "\n".join(lines[start:end + 1]).strip()
 
 
-def extract_tasks(client: LocalClient, report_path: Path, tracer=NOOP_TRACER) -> list[dict]:
+def extract_tasks(client: GenClient, report_path: Path, tracer=NOOP_TRACER) -> list[dict]:
     """Step 1 — the model reads the report file and composes its own task list."""
     report = report_path.read_text(encoding="utf-8")
     prompt, _ = _resolve_prompt(tracer, "poc-extract", EXTRACT_PROMPT, report=report)
@@ -1586,7 +1632,7 @@ _LOOKUP_RE = re.compile(r"^\s*LOOKUP:\s*(\S+)\s*$", re.MULTILINE)
 DEFAULT_LOOKUP_BUDGET = 3
 
 
-def _select_protocol(requested: str, client: LocalClient) -> tuple[str, str]:
+def _select_protocol(requested: str, client: GenClient) -> tuple[str, str]:
     """(mode, source) per 008 contracts/protocol-selection.md's decision table.
     mode: "tool" | "marker". source: "detected" | "forced".
 
@@ -1640,7 +1686,7 @@ def _render_lookup_response(resolved: list[tuple[str, list]]) -> str:
 
 
 def _generate_with_lookups(
-    client: LocalClient, prompt: str, options: dict,
+    client: GenClient, prompt: str, options: dict,
     symbol_index: SymbolIndex | None, budget: int,
     on_lookup=None,  # Callable[[str, bool, int], None] | None — (symbol, resolved, match_count)
 ) -> str:
@@ -1749,7 +1795,7 @@ def _strip_tool_scaffolding(content: str) -> str:
 
 
 def _generate_with_tool_calls(
-    client: LocalClient, prompt: str, options: dict,
+    client: GenClient, prompt: str, options: dict,
     symbol_index: SymbolIndex | None, budget: int,
     on_lookup=None,
 ) -> str:
@@ -1807,7 +1853,7 @@ def _grounding(project: Path, location: str, scaffold: str, callable_api: str) -
 
 
 def _traced_round_trip(
-    name: str, client: LocalClient, prompt: str,
+    name: str, client: GenClient, prompt: str,
     symbol_index: SymbolIndex | None, lookup_budget: int,
     on_lookup, protocol_mode: str,
     tracer: Tracer, trace, prompt_provenance: list[dict] | None = None,
@@ -1935,7 +1981,7 @@ def _callable_field(callable_api: str, symbol_index: SymbolIndex | None) -> str:
     return base
 
 
-def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
+def draft(client: GenClient, task: dict, project: Path, scaffold: str = "",
           example: str = "", files: str = "", callable_api: str = "",
           symbol_index: SymbolIndex | None = None, lookup_budget: int = DEFAULT_LOOKUP_BUDGET,
           on_lookup=None, protocol_mode: str = "marker",
@@ -1958,7 +2004,7 @@ def draft(client: LocalClient, task: dict, project: Path, scaffold: str = "",
     )
 
 
-def fix(client: LocalClient, task: dict, previous: str, error: str,
+def fix(client: GenClient, task: dict, previous: str, error: str,
         project: Path, scaffold: str = "", example: str = "", files: str = "", callable_api: str = "",
         symbol_index: SymbolIndex | None = None, lookup_budget: int = DEFAULT_LOOKUP_BUDGET,
         on_lookup=None, protocol_mode: str = "marker",
@@ -2258,7 +2304,10 @@ def main() -> None:
                     help="Foundry project root of the EXTERNAL target (or env POC_PROJECT). Never hardcoded here.")
     ap.add_argument("--report", type=Path, default=os.environ.get("POC_REPORT"), required="POC_REPORT" not in os.environ,
                     help="audit report file the model reads (or env POC_REPORT), inside the external target.")
-    ap.add_argument("--model", default=MODEL)
+    ap.add_argument("--provider", choices=["local", "openrouter", "gemini"], default="local",
+                    help="model provider (hosted=opt-in, key from env, marker protocol)")
+    # Default "" (not MODEL): a hosted provider falls back to ITS default model, not the local slug.
+    ap.add_argument("--model", default="", help="override the provider's default model")
     ap.add_argument("--image", default=None,
                     help="Foundry sandbox image (default: ghcr.io/foundry-rs/foundry:latest). "
                          "Use a docker/Dockerfile.foundry-baked image for offline solc (see docs/roadmap.md gotcha #6-8).")
@@ -2332,34 +2381,50 @@ def main() -> None:
             f.write(json.dumps(entry) + "\n")
         print(json.dumps(entry, ensure_ascii=False), flush=True)
 
-    client = LocalClient(model=args.model, host=args.host, timeout_s=GEN_TIMEOUT_S)
+    client = build_generation_client(args.provider, args.model, args.host, GEN_TIMEOUT_S)
+    log({"event": "provider", "provider": args.provider, "model": client.model})
 
-    # Keep-alive: a cloudflared quick tunnel idles out (~60-100s, roadmap gotcha
-    # #11) and the docker-compile gap between draft/fix calls is exactly such an
-    # idle window. A daemon thread pings /api/tags every 30s so the tunnel never
-    # goes idle mid-run. Dies with the process.
-    def _keepalive() -> None:
-        while True:
-            time.sleep(30)
-            try:
-                client.available()
-            except Exception:
-                pass
-    threading.Thread(target=_keepalive, daemon=True).start()
+    if args.provider == "local":
+        # Keep-alive: a cloudflared quick tunnel idles out (~60-100s, roadmap gotcha
+        # #11) and the docker-compile gap between draft/fix calls is exactly such an
+        # idle window. A daemon thread pings /api/tags every 30s so the tunnel never
+        # goes idle mid-run. Dies with the process.
+        def _keepalive() -> None:
+            while True:
+                time.sleep(30)
+                try:
+                    client.available()
+                except Exception:
+                    pass
+        threading.Thread(target=_keepalive, daemon=True).start()
 
-    # Cold-load of a 7b exceeds ready()'s short probe on modest hardware — warm
-    # it once so it's resident before the first real call (same as chat mode).
-    log({"event": "warming", "model": args.model})
-    if not client.warm():
-        log({"event": "abort", "reason": f"could not warm {args.model} (is Ollama up?)"})
-        sys.exit(1)
-    if not client.ready():
-        log({"event": "abort", "reason": f"local model {args.model} not ready"})
-        sys.exit(1)
+        # Cold-load of a 7b exceeds ready()'s short probe on modest hardware — warm
+        # it once so it's resident before the first real call (same as chat mode).
+        log({"event": "warming", "model": client.model})
+        if not client.warm():
+            log({"event": "abort", "reason": f"could not warm {client.model} (is Ollama up?)"})
+            sys.exit(1)
+        if not client.ready():
+            log({"event": "abort", "reason": f"local model {client.model} not ready"})
+            sys.exit(1)
+    else:
+        # Hosted (spec 022): no Ollama keep-alive/warm/available — readiness = key present
+        # (+ SDK for gemini). A misconfiguration stops here, before any finding is processed.
+        err = hosted_ready_error(args.provider, client)
+        if err:
+            log({"event": "abort", "reason": err})
+            sys.exit(1)
 
     # Protocol Mode (feature 008): decided once per run, never re-evaluated
-    # mid-run or per-attempt (research.md R4 — no mid-run downgrade).
-    protocol_mode, protocol_source = _select_protocol(args.lookup_protocol, client)
+    # mid-run or per-attempt (research.md R4 — no mid-run downgrade). C1 (spec 022):
+    # resolve FIRST so a hosted provider is 'marker' — `_select_protocol` returns
+    # immediately for marker and never calls supports_tools() (which hosted lacks).
+    try:
+        requested_protocol = resolve_lookup_protocol(args.provider, args.lookup_protocol)
+    except ProviderStartupError as e:
+        log({"event": "abort", "reason": str(e)})
+        sys.exit(1)
+    protocol_mode, protocol_source = _select_protocol(requested_protocol, client)
     log({"event": "lookup_protocol", "mode": protocol_mode, "source": protocol_source})
 
     # Langfuse tracing (sr_agent/eval/tracer.py) — a no-op unless the project's
