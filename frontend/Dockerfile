@@ -17,6 +17,12 @@ RUN npm run build
 FROM python:3.12-slim AS app
 WORKDIR /app
 
+# System deps: `git` is REQUIRED for the repo-URL target-ingestion mode (spec 021 —
+# the backend shallow-clones a target repo). Without it, repo-URL sessions fail;
+# path mode still works. `python:*-slim` has no git.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # Runtime deps. Mirrors pyproject.toml [project.dependencies] + the backend's
 # fastapi/uvicorn (frontend/backend/requirements.txt). We install deps only and
 # run from source (PYTHONPATH=/app) — the project is not pip-packaged.
