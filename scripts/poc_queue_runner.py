@@ -40,14 +40,23 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sr_agent.llm_core.gemini_client import SIMPLE_MODELS, GeminiClient
+from sr_agent.llm_core.gemini_client import SIMPLE_MODELS, GeminiClient, GeminiUnavailable
 from sr_agent.llm_core.local_client import LocalClient, ModelUnavailableError
-from sr_agent.llm_core.openrouter_client import OPENROUTER_MODELS, OpenRouterClient
+from sr_agent.llm_core.openrouter_client import (
+    OPENROUTER_MODELS,
+    OpenRouterClient,
+    OpenRouterUnavailable,
+)
 from sr_agent.tools.sandbox import DockerSandbox, SandboxUnavailable
 from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 
 from scripts.solidity_index import SymbolIndex, expand_referenced_types
+
+# Any model-transport failure — local (Ollama) OR hosted (Gemini/OpenRouter). The
+# harness catches these at every model-call site so a hosted 404/503/quota surfaces
+# as a clean abort/skip, never a raw traceback (spec 022 live-run gotcha).
+MODEL_ERRORS = (ModelUnavailableError, GeminiUnavailable, OpenRouterUnavailable)
 
 # ── Defaults (overridable via CLI) ───────────────────────────────────────────
 # The target project + audit report are ALWAYS supplied by the operator at the
@@ -810,7 +819,7 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
     )
     try:
         code = _extract_solidity(client.generate(prompt, options={"num_ctx": NUM_CTX, "num_predict": POC_PREDICT}))
-    except ModelUnavailableError as e:
+    except MODEL_ERRORS as e:
         log({"event": "scaffold_synthesis_failed", "finding_id": fid, "reason": "no_output",
              "error": str(e)[:200]})
         return None
@@ -2103,7 +2112,7 @@ def _process_finding(
             code = draft(client, task, args.project, scaffold, example, file_map, callable_api,
                         symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode,
                         tracer, trace, lessons=lessons)
-    except ModelUnavailableError as e:
+    except MODEL_ERRORS as e:
         log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
         return "draft_failed"
     # Feature 015 US1: a reply with no Solidity (prose-only / empty tool round-trip) yields
@@ -2256,7 +2265,7 @@ def _process_finding(
                            args.project, scaffold, example, file_map, callable_api,
                            symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode,
                            tracer, trace, lessons=lessons)
-        except ModelUnavailableError as e:
+        except MODEL_ERRORS as e:
             log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
             outcome = "fix_failed"
             break
@@ -2448,7 +2457,7 @@ def main() -> None:
     log({"event": "extract_start", "report": str(args.report), "model": args.model})
     try:
         tasks = extract_tasks(client, args.report, tracer)
-    except (ModelUnavailableError, json.JSONDecodeError, OSError) as e:
+    except (*MODEL_ERRORS, json.JSONDecodeError, OSError) as e:
         log({"event": "extract_failed", "error": str(e)})
         sys.exit(1)
     log({"event": "extracted", "count": len(tasks), "ids": [t["id"] for t in tasks]})
