@@ -8,7 +8,7 @@ research.md R1 for why this library over tree-sitter-solidity).
 
 Walks the RAW parse tree (not `solidity_parser.parser.objectify`, whose
 `FunctionObject` wrapper drops modifier information — verified empirically against
-this project's real `SharesCooldown.cancel`, research.md's own validation) so every
+this project's real `DemoCooldown.cancel`, research.md's own validation) so every
 `Symbol.definition` — a struct's fields, a function's full signature AND its real
 access-control modifiers, an enum's values — is grammar-correct, never guessed.
 """
@@ -173,8 +173,8 @@ class SymbolIndex:
     def lookup(self, name: str) -> list[Symbol]:
         """Exact match on `name`; if that misses and `name` is a `Contract.Symbol`
         qualified reference, fall back to the bare suffix (live H-01 run,
-        2026-07-05: the model asked for `ISharesCooldown.TCancelGuard` and got a
-        false not-found even though `TCancelGuard` genuinely exists in the index
+        2026-07-05: the model asked for `IDemoCooldown.TDemoGuard` and got a
+        false not-found even though `TDemoGuard` genuinely exists in the index
         under its bare name — the index is keyed on bare names throughout)."""
         matches = list(self._symbols.get(name, []))
         if not matches and "." in name:
@@ -309,9 +309,9 @@ def expand_referenced_types(callable_api: str, index: "SymbolIndex | None",
 
     The on-demand lookup already returns struct fields (research.md R2) — but the model
     constructs the type on attempt 1, before it ever looks up, and invents the fields
-    (observed: a 3-field `TExitUpperBounds` that actually has 5). Surfacing the definitions
+    (observed: a 3-field `TDemoBounds` that actually has 5). Surfacing the definitions
     proactively in the grounding removes the guess. Field types that are themselves a known
-    struct/enum are expanded ONE level (e.g. `TExitParams` inside `TExitUpperBounds`).
+    struct/enum are expanded ONE level (e.g. `TDemoParams` inside `TDemoBounds`).
     Detection is a membership test of names the index already knows against the
     `callable_api` text — no signature-string parsing. Deduped, budget-bounded; reuses each
     `Symbol.definition`. Returns "" when nothing applies."""

@@ -170,12 +170,12 @@ Description: {description}
 The test file will be saved in `audit/poc/`. Rules:
 - [project_files] is the COMPLETE list of real contracts/interfaces and their exact
   import paths. Import types ONLY from this list, using the path shown verbatim. If a
-  name is NOT in the list (e.g. `IUnstakeCooldown`), it DOES NOT EXIST — never invent
-  an interface; use the closest real one that IS listed (e.g. `ICooldown`).
+  name is NOT in the list (e.g. `IFooManager`), it DOES NOT EXIST — never invent
+  an interface; use the closest real one that IS listed (e.g. `IFoo`).
 - [callable_api] lists the REAL function signatures of the finding's contracts. Call
   methods ONLY with a name + argument count that appears there verbatim — do NOT
   guess a method name or the number of arguments (e.g. use `transfer(token, from, to,
-  amount)` if shown, not an invented `requestUnstake(...)`).
+  amount)` if shown, not an invented `requestFoo(...)`).
 - If an [example_poc] is shown, it is a REAL working PoC from this project for a
   DIFFERENT finding. COPY its structure exactly: same imports style, same
   `is <BaseName>` inheritance, NO setUp (it calls the deploy helper inside the
@@ -185,17 +185,17 @@ The test file will be saved in `audit/poc/`. Rules:
   (`contract PoC_{ident} is <BaseName>`) and set up EXACTLY like the [example_poc]:
   - Copy the example's setup pattern precisely. If the example overrides
     `setUp() public override` with `super.setUp();` + a base setup helper (e.g.
-    `setUpSharesCooldownBase()`), do the same. If instead it calls a deploy helper
-    (e.g. `_deployStrataStack()`) as the first line of the test, do that. Do not
+    `setUpFooBase()`), do the same. If instead it calls a deploy helper
+    (e.g. `_deployFooStack()`) as the first line of the test, do that. Do not
     invent a different setup.
   - PREFER the base's own helper functions (e.g. `_deposit`, `_grantRole`, the
     seeding helpers literally shown in [test_scaffold]) over calling methods on the
-    deployed contracts. Do NOT guess method names on `cdo`/vaults/etc. — if a method
-    is not shown verbatim in the base or target source, do not call it.
+    deployed contracts. Do NOT guess method names on the deployed contracts — if a
+    method is not shown verbatim in the base or target source, do not call it.
   - Use the base's already-deployed state variables; do NOT redeploy or mock what
     the base provides. BUT Solidity imports are file-scoped and are NOT inherited:
     you MUST import every interface/type you reference in the body (e.g. `IERC20`,
-    `IUnstakeCooldown`, error selectors) using the paths shown in the source blocks,
+    `IFoo`, error selectors) using the paths shown in the source blocks,
     even though the base already imports them.
 - Import each contract using EXACTLY the path in its source-block header
   (`// [target] import this file as: "..."`) — do NOT guess `./Name.sol`.
@@ -255,17 +255,17 @@ previous source, the `forge` output, and the REAL target source — all untruste
 Diagnose why it failed (compile error, wrong import path, invented API, revert not
 triggered, missing setup, ...) and return a CORRECTED full Foundry test contract.
 Import types ONLY from [project_files] using the exact path; a name not in that list
-does not exist (e.g. use the real `ICooldown`, never an invented `IUnstakeCooldown`).
+does not exist (e.g. use the real `IFoo`, never an invented `IFooManager`).
 Call methods ONLY with a name + argument count shown in [callable_api] — if the error
 is "member not found"/"wrong argument count", pick the real signature listed there.
 If an [example_poc] is shown, match its structure (inheritance, no setUp, helper calls).
 If a [test_scaffold] base is shown, INHERIT it (`is <BaseName>`). If the error is
 4334 "override non-virtual", REMOVE your `setUp()` entirely and call the base's
-deploy helper (e.g. `_deployStrataStack()`) as the first line of the test instead.
+deploy helper (e.g. `_deployFooStack()`) as the first line of the test instead.
 If the error is "member not found", you invented a method — use the base's helper
 functions (`_deposit`, `_grantRole`, …) shown in [test_scaffold], not guessed
 methods on the deployed contracts. If the error is "Undeclared identifier" for a
-TYPE (e.g. `IERC20`, `IUnstakeCooldown`), you used it without importing it —
+TYPE (e.g. `IERC20`, `IFoo`), you used it without importing it —
 Solidity imports are file-scoped and NOT inherited from the base, so add the import
 using the path shown in the source blocks.
 Import each file using EXACTLY the path in its source-block header; use ONLY
@@ -347,7 +347,7 @@ imports, and deploy conventions):
 Write ONE abstract contract named `{name}` that:
 - `is <ExistingBaseName>` (inherit the existing base shown above),
 - declares each missing contract as an `internal` state variable (e.g.
-  `SharesCooldown internal sharesCooldown;`),
+  `Foo internal foo;`),
 - deploys and wires each in an `internal` setup helper (e.g. `setUp{name}()` that first
   calls the existing base's setup, then deploys the missing contract with the SAME
   constructor/initializer the real source requires and registers it with the protocol
@@ -493,7 +493,7 @@ def _location_names(location: str) -> list[str]:
 
 
 # lowercase-starting identifiers in the location are candidate METHOD names
-# (e.g. "UnstakeCooldown.transfer" -> "transfer"); a tiny stopword list filters
+# (e.g. "DemoStaking.transfer" -> "transfer"); a tiny stopword list filters
 # out connective English words the model's free-text location may contain.
 _LOC_METHOD_RE = re.compile(r"\b[a-z][A-Za-z0-9]{3,}\b")
 _LOC_METHOD_STOPWORDS = {"this", "with", "from", "into", "when", "that", "path", "line"}
@@ -523,15 +523,15 @@ def mechanism_signal(code: str, location: str, description: str = "") -> dict:
     safely block on; see the 2026-07-05 lesson on trusting a single heuristic).
     Reports whether the finding's own function name(s) are actually CALLED in the
     PoC body, not just a contract deployed — a compiling PoC can still exploit the
-    wrong function/contract (observed: H-02 deployed UnstakeCooldown but called
+    wrong function/contract (observed: H-02 deployed DemoStaking but called
     sharesCooldown.transfer instead). Read this signal, don't gate on it alone —
     verify with path B / a human/independent-model read for anything that matters.
 
     Candidates come from BOTH `location` and `description` (root-caused
     2026-07-06): extraction is non-deterministic and `location` can degrade to a
-    bare filename (`SharesCooldown.sol`, no method names) on one run even when a
-    richer location (`StrataCDO.coverage / calculateExitMode +
-    SharesCooldown.cancel`) was extracted for the IDENTICAL finding on another —
+    bare filename (`DemoCooldown.sol`, no method names) on one run even when a
+    richer location (`DemoVault.coverage / calculateMode +
+    DemoCooldown.cancel`) was extracted for the IDENTICAL finding on another —
     silently blinding this diagnostic exactly when it matters, e.g. a PoC named
     `testRevertWhenRequestRedeemWithZeroShares` reached a real fork PASS with
     zero structural defects while never calling `coverage()`/`cancel()`, the
@@ -571,7 +571,7 @@ def read_location_source(project: Path, location: str,
     use from audit/poc/. Grounds the draft in (a) the real contract API and
     (b) the real import paths + dependency interfaces — the two things the model
     otherwise invents (docs/roadmap.md gotcha #5; observed 2026-07-04: 14b guessed
-    `./StrataCDO.sol` and invented `IERC20.mint`/`balanceOf_` mocks, failing every
+    `./DemoVault.sol` and invented `IERC20.mint`/`balanceOf_` mocks, failing every
     attempt on File-not-found / undeclared-identifier compile errors). `depth`/`budget`
     are trimmed when a test scaffold is also supplied (the scaffold carries the setup).
     """
@@ -703,8 +703,8 @@ _SCAFFOLD_IS_RE = re.compile(r"\bcontract\s+\w+\s+is\s+([^{]+?)\s*\{")
 
 def _scaffold_base_name(text: str) -> str | None:
     """The concrete LEAF contract to inherit from a test_scaffold file — the contract
-    DECLARED in it that is not itself a base of another in-file contract (e.g. `SIP2Test`,
-    NOT the imported `NeutrlDeploy` it extends). Live H-01 run (2026-07-14): given the raw
+    DECLARED in it that is not itself a base of another in-file contract (e.g. `DemoTest`,
+    NOT the imported `DemoDeploy` it extends). Live H-01 run (2026-07-14): given the raw
     scaffold file, the model inherited the grandparent base and lost setUp + all the deployed
     state (`sharesCooldown`, the exit constants) → a cascade of `Undeclared identifier`. The
     leaf is what actually has setUp + the state; Solidity convention puts bases first, leaf last."""
@@ -740,11 +740,21 @@ def read_scaffold(project: Path, paths: list[Path]) -> str:
     return "\n\n".join(blocks)
 
 
-# A state-variable declaration's TYPE, e.g. `SharesCooldown internal sharesCooldown;`
-# captures `SharesCooldown` — used to check whether a scaffold actually PROVIDES an
+# A state-variable declaration's TYPE, e.g. `DemoCooldown internal sharesCooldown;`
+# captures `DemoCooldown` — used to check whether a scaffold actually PROVIDES an
 # instance of a contract type a finding needs, not just whether the scaffold text
 # happens to mention that name somewhere (e.g. in an import or a comment).
 _STATE_VAR_TYPE_RE = re.compile(r"\b([A-Z]\w*)\s+(?:internal|public|private)\s+\w+\s*;")
+
+# The same declaration shape, but captures the NAME — a different question from the one
+# above (which asks "is an instance of type T provided?"). Feature 024 asks "which NAME
+# collided / is this name the base's own?", so:
+#   - the type is `\w+`, NOT `[A-Z]\w*`: a live run (2026-07-16) hit a lowercase-initial
+#     type (shape: `sSomePairProvider internal provider;`). Casing carries no meaning, and
+#     the uppercase assumption would have silently missed the very collision this exists for.
+#   - callers that must not misfire strip comments FIRST (see `_strip_comments`): a
+#     commented-out declaration is not evidence.
+_BASE_STATE_VAR_RE = re.compile(r"\b\w+\s+(?:internal|public|private)\s+(\w+)\s*;")
 
 
 def scaffold_missing_types(scaffold: str, target_stems: list[str],
@@ -756,9 +766,9 @@ def scaffold_missing_types(scaffold: str, target_stems: list[str],
     identifiers are.
 
     Root-caused 2026-07-06: the auto-discovered scaffold
-    (`StrataProtocolDeploymentBase`) deploys `ERC20Cooldown` but declares no
-    `SharesCooldown` at all — H-01 needs `SharesCooldown`-specific behavior
-    (`cancel()` with `TCancelGuard`, `setVaultExitBounds`). Six live attempts were
+    (`DemoProtocolDeploymentBase`) deploys `ERC20Stub` but declares no
+    `DemoCooldown` at all — H-01 needs `DemoCooldown`-specific behavior
+    (`cancel()` with `TDemoGuard`, `setDemoBounds`). Six live attempts were
     spent before this was noticed by hand. DIAGNOSTIC ONLY (logged, not gating): a
     false positive here must not block a run that could otherwise succeed.
 
@@ -878,7 +888,7 @@ FILEMAP_CHAR_BUDGET = 10000
 def build_file_manifest(project: Path, symbol_index: SymbolIndex | None = None) -> str:
     """A compact, authoritative list of every real contract/interface under
     contracts/ and its exact import path from audit/poc/. Counters the model's
-    habit of inventing a 'natural' interface name (IUnstakeCooldown) when the real
+    habit of inventing a 'natural' interface name (IDemoStaking) when the real
     one (ICooldown) is only buried in a long source block — a flat allow-list is
     far easier for a small model to attend to than reading it out of source.
 
@@ -886,7 +896,7 @@ def build_file_manifest(project: Path, symbol_index: SymbolIndex | None = None) 
     contract/interface declarations, not the `.sol` filename — this surfaces every
     real interface a multi-interface file bundles under one misleading filename
     (verified 2026-07-05 against the real target: a file `Interfaces.sol` hid
-    `IAavePool`, `IERC20Cooldown`, `IEulerVault`, and others behind one filename
+    `IAavePool`, `IERC20Stub`, `IEulerVault`, and others behind one filename
     entry; the AST path lists each real name). Known, accepted trade-off (same
     shape as research.md R8 elsewhere in this feature): the ~4 files that fail to
     parse entirely drop out of the manifest instead of showing a (possibly
@@ -974,18 +984,18 @@ def build_callable_api(project: Path, location: str, symbol_index: SymbolIndex |
 
     Each name mentioned in `location` gets its OWN budget share, not one shared pool
     consumed first-come-first-served (fixed 2026-07-05: on the real H-01 location
-    `StrataCDO.coverage / ... + SharesCooldown.cancel`, `StrataCDO`'s own block plus
-    its dependency chain exhausted the whole 6000-char budget before `SharesCooldown`
+    `DemoVault.coverage / ... + DemoCooldown.cancel`, `DemoVault`'s own block plus
+    its dependency chain exhausted the whole 6000-char budget before `DemoCooldown`
     — the actual finding target — ever got a turn, so its `onlyUser(user)` CALLER
     REQUIREMENT never reached the model at all; reproduced byte-for-byte by both the
     regex and AST paths, i.e. a pre-existing bug, not one T020 introduced).
 
     Within a file's own share, a function whose name is explicitly mentioned in
-    `location` (via `_location_methods`, e.g. `cancel` in "SharesCooldown.cancel")
+    `location` (via `_location_methods`, e.g. `cancel` in "DemoCooldown.cancel")
     is rendered FIRST, ahead of every other function in that file — otherwise the
     actual finding-target function can still be truncated out by budget if it
     happens to be declared later in the source file than unrelated functions
-    (observed 2026-07-05: `cancel` itself was truncated out of SharesCooldown's
+    (observed 2026-07-05: `cancel` itself was truncated out of DemoCooldown's
     block even after the per-name budget fix, because 7 other external functions
     are declared before it in the same file)."""
     names = _location_names(location)
@@ -1274,7 +1284,7 @@ def _fix_nested_type_imports(code: str, symbol_index, file_map: str = "") -> tup
 def _fix_scaffold_base(code: str, scaffold_text: str) -> tuple[str, bool]:
     """When a test_scaffold is provided, force the PoC to inherit ITS leaf base. Live H-01
     run (2026-07-14): the model wrote a coherent, right-mechanism exploit but inherited the
-    imported grandparent (`NeutrlDeploy`) instead of the scaffold's leaf (`SIP2Test`), losing
+    imported grandparent (`DemoDeploy`) instead of the scaffold's leaf (`DemoTest`), losing
     setUp + every deployed symbol → `Undeclared identifier`. Deterministic (spec-016 lesson:
     the model doesn't always obey the grounding). Only rewrites when a scaffold leaf is known
     and the PoC's inheritance list doesn't already contain it. Returns (code, changed)."""
@@ -1413,8 +1423,67 @@ def _line_level_hints(forge_output: str, code: str, callable_api: str) -> list[s
     return out
 
 
+# 9097 — a redeclaration collision, scoped to its own error block.
+#
+# TEXT-matched, never code-matched. Feature 024 was first specified against `2333`; the live
+# compiler emits `9097`, so a code-keyed guard would have silently never fired — the same rot
+# that killed a curated model list (docs/roadmap.md). Codes vary by solc version and
+# declaration context; the message string is what this layer has always trusted, which is why
+# every entry here matches text and carries its code in a comment only.
+_REDECLARED_RE = re.compile(
+    r"Identifier already declared\.(.*?)(?=\nError \(|\nWarning|\Z)", re.S)
+# `--> path/to/File.sol:LINE:COL` — the compiler's own report of WHERE each declaration lives.
+_SRC_PTR_RE = re.compile(r"-->\s*(\S+\.sol):\d+")
+
+
+def _base_state_vars(scaffold: str) -> set[str]:
+    """State-variable NAMES the test scaffold declares (feature 024).
+
+    Comments are stripped FIRST: a commented-out declaration is not evidence, and this feeds
+    the one gate that must not misfire (a false positive replaces a correct hint with a wrong
+    one). The two existing scaffold parsers disagree on this — `_scaffold_base_name` strips,
+    `scaffold_missing_types` does not — and we follow the former deliberately."""
+    if not scaffold:
+        return set()
+    return set(_BASE_STATE_VAR_RE.findall(_strip_comments(scaffold)))
+
+
+def _redeclaration_hint(block: str) -> str:
+    """Feature 024 US1: an authoritative fix for one `Identifier already declared` block.
+
+    Live run 2026-07-16: findings 2 and 5 both drafted a PoC that inherits the project's test
+    base and then re-declared one of its state variables. There was no hint for this, so
+    finding-5 hit the identical wall on 3/3 attempts and quarantined — one rename from
+    compiling."""
+    # Both the primary and the `Note:` declaration name the SAME identifier, so agreement is
+    # the signal. Not every collision is a visibility-qualified state var (a function, a local,
+    # a contract name can collide) — when the name isn't unambiguous we say something true and
+    # general rather than name the wrong identifier (FR-004: a wrong specific instruction sends
+    # the model chasing something that isn't there).
+    names = list(dict.fromkeys(_BASE_STATE_VAR_RE.findall(block)))
+    if len(names) != 1:
+        return ("An identifier is already declared in a contract you inherit — do NOT redeclare "
+                "inherited state. Remove your duplicate declaration and use the inherited one, "
+                "or rename yours to a non-colliding name.")
+    name = names[0]
+    # WHERE the prior declaration lives comes from the compiler's own report, not from
+    # re-parsing the scaffold: `_scaffold_base_name` is per-FILE by contract (read_scaffold
+    # calls it per file), whereas this layer receives read_scaffold's rendered MULTI-file blob
+    # — deriving a base from that would compute leaves across all files and could name the
+    # WRONG one. The compiler names both files; the one that is not ours is the base's.
+    where = next((p for p in _SRC_PTR_RE.findall(block) if POC_SUBDIR not in p), None)
+    loc = f" (in `{where}`)" if where else ""
+    # Both routes, always: the live collision had DIFFERENT types on the two declarations
+    # (the base's own wrapper type vs a plainer one), so "use the inherited one" cannot be
+    # the only advice — it may not typecheck.
+    return (f"`{name}` is ALREADY declared by the test base you inherit{loc} — do not redeclare "
+            f"it. Delete your own `{name}` declaration and use the inherited one (the base's "
+            f"setUp already deployed it). If you genuinely need a separate variable, rename "
+            f"yours instead — the two declarations may have different types.")
+
+
 def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: str = "",
-                    symbol_index=None) -> str:
+                    symbol_index=None, scaffold: str = "") -> str:
     """Turn each compiler error into an AUTHORITATIVE, specific fix by resolving it
     against ground truth (real signatures + real paths). The compiler says exactly
     what's wrong; we know exactly what's right — connect the two so the repair is a
@@ -1435,6 +1504,23 @@ def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: s
     # 9582 — member not found on a contract → list that contract's real functions
     for member, contract in re.findall(
             r'Member "(\w+)" not found[^.]*?in contract (\w+)', forge_output):
+        # Feature 024 US3. Live run 2026-07-16, finding-2: the PoC wrote `<vault>.<var>()` for a
+        # name that is REAL — a state variable the inherited base declares and deploys. The
+        # advice below is true but misdirects: it sends the model hunting a substitute function
+        # on the wrong contract. Two attempts died there; the fix was to delete the qualifier.
+        # "Not a member of Y" does not mean "not real".
+        #
+        # Gated on POSITIVE evidence only, so it is strictly narrower than what this entry
+        # already handles and cannot regress a working case. No suppression when the name might
+        # also be some member of `contract`: the 9582 error's own precondition is that the
+        # compiler ALREADY ruled that access out ("not found or not visible"), so the base's own
+        # declaration is the accessible one either way.
+        if member in _base_state_vars(scaffold):
+            hints.append(
+                f"`{member}` is NOT a member of `{contract}` — it is the test base's OWN state "
+                f"variable, already declared and deployed by the base you inherit. Drop the "
+                f"`{contract}.` qualifier and reference `{member}` directly.")
+            continue
         sigs = _sigs_for(callable_api, contract)
         if sigs:
             hints.append(f"`{contract}` has NO member `{member}`. Use only its real functions:\n{sigs}")
@@ -1453,6 +1539,9 @@ def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: s
     if "Identifier not found" in forge_output:
         hints.append("An identifier is undefined: use only names from [project_files] + the base's state "
                      "variables, and IMPORT every type you reference (imports are not inherited from the base).")
+    # 9097 — redeclaring something the inherited test base already declares (feature 024)
+    for block in _REDECLARED_RE.findall(forge_output):
+        hints.append(_redeclaration_hint(block))
     return "\n".join(dict.fromkeys(hints))
 
 
@@ -1671,7 +1760,7 @@ def _render_lookup_response(resolved: list[tuple[str, list]]) -> str:
                 text = f"// {m.contract} ({m.kind})\n{m.definition}"
                 if m.contract and m.kind in ("struct", "enum"):
                     # Live H-01 run (2026-07-05): the model kept writing
-                    # `import { TExitParams } from "ISharesCooldown.sol";` for a
+                    # `import { TDemoParams } from "IDemoCooldown.sol";` for a
                     # struct declared INSIDE that interface — invalid Solidity,
                     # since a nested type is not a top-level declaration and
                     # cannot be a named import target.
@@ -2218,7 +2307,7 @@ def _process_finding(
             + "\n- ".join(defects) if defects else ""
         )
         hints = _targeted_hints(test.stdout + "\n" + test.stderr, callable_api, file_map, code,
-                                symbol_index)
+                                symbol_index, scaffold)
         hint_note = f"\n\nTARGETED FIXES (authoritative — apply exactly):\n{hints}" if hints else ""
         revert_note = ""
         if compiled and not hints and not defects:
