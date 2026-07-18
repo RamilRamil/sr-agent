@@ -1679,7 +1679,13 @@ def _git_apply(copy_dir: Path, diff: str) -> bool:
         return False
 
 
-_MUTVERIFY_COPY_SKIP = shutil.ignore_patterns("out", "cache_forge", ".git", "node_modules")
+# Feature 027: KEEP `out`/`cache_forge` in the copy so the patched rebuild is INCREMENTAL, not a
+# cold full via_ir build. forge's cache is content-keyed (foundry.toml `cache_path='cache_forge'`),
+# so the fix's changed file is recompiled — a stale artifact is never served — turning a minutes-long
+# via_ir rebuild (an OOM risk under a tight memory ceiling; the most frequent cold-build site, once per
+# passing proof) into seconds. Still skip `.git`/`node_modules` (huge + irrelevant). Behavior is
+# otherwise unchanged: ephemeral copy, same PoC re-run, real target tree never mutated.
+_MUTVERIFY_COPY_SKIP = shutil.ignore_patterns(".git", "node_modules")
 
 
 def mutation_verify(project: Path, task: dict, poc_rel_path: str, sandbox, log,
@@ -2484,6 +2490,25 @@ def _process_finding(
     return outcome
 
 
+# Feature 027: the STANDALONE operator harness needs more memory than the kernel sandbox default
+# (`DockerSandbox.memory_limit = "512m"`) because the target compiles with `via_ir` — a Yul-IR
+# pipeline whose COLD full build needs several GB (a live run OOM-killed solc: `signal: 9`). The
+# raise applies ONLY here, at the harness's construction site: the kernel `DockerSandbox` class, its
+# 512m default, and the SECURE interactive agent (pipeline.py / loop.py, which use bare
+# `DockerSandbox()`) are untouched. Memory is a DoS-protection knob, not an isolation invariant —
+# `--network none`, `--cap-drop ALL`, `no-new-privileges`, `--pids-limit`, and sandbox-only PoC
+# execution are all unchanged; the harness is already the looser operator context (it opts into a
+# bridge network for mainnet-fork PoC runs). Env-tunable because different targets/hosts need
+# different amounts; default `6g` is a generous, empirically-confirmed headroom over the killed 512m
+# (see spec 027 calibration).
+_HARNESS_SANDBOX_MEMORY_DEFAULT = "6g"
+
+
+def _harness_sandbox() -> DockerSandbox:
+    return DockerSandbox(
+        memory_limit=os.environ.get("SR_SANDBOX_MEMORY", _HARNESS_SANDBOX_MEMORY_DEFAULT))
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--project", type=Path, default=os.environ.get("POC_PROJECT"), required="POC_PROJECT" not in os.environ,
@@ -2665,7 +2690,7 @@ def main() -> None:
             log({"event": "only_ids_not_found", "missing": sorted(missing)})
     else:
         todo = tasks[: args.limit] if args.limit else tasks
-    sandbox = DockerSandbox()
+    sandbox = _harness_sandbox()
     run_start = time.monotonic()
 
     # AST-backed SymbolIndex (feature 007) — built once per run, real grammar (not
