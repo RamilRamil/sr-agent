@@ -450,9 +450,35 @@ def _extract_solidity(text: str) -> str:
     return "\n".join(lines[start:end + 1]).strip()
 
 
+def _attach_fixes(raw_tasks: list, report_text: str,
+                  operator_patches: dict[str, str]) -> list[dict]:
+    """Turn a raw task list (from the model OR a pinned file) into well-formed findings, each
+    carrying its two fixes (feature 028 — shared by `extract_tasks` and `load_pinned_tasks` so a
+    pinned task behaves byte-identically to an extracted one). Keeps only items with an id+title;
+    fills an id if omitted.
+
+    Both fixes are attached HERE, not in the caller, precisely so the pinned and extracted paths
+    cannot drift: `fix` is the report's own diff (deterministic, feature 010) and `fix_patch` is the
+    operator's `--fix-patch` (feature 025). Neither comes from the model."""
+    out = []
+    for i, t in enumerate(raw_tasks):
+        if not isinstance(t, dict) or not t.get("title"):
+            continue
+        finding = {
+            "id": str(t.get("id") or f"T-{i+1:02d}"),
+            "title": str(t.get("title", "")),
+            "location": str(t.get("location", "")),
+            "description": str(t.get("description", "")),
+        }
+        finding["fix"] = extract_fix_for_finding(report_text, finding)
+        finding["fix_patch"] = operator_patches.get(finding["id"])
+        out.append(finding)
+    return out
+
+
 def extract_tasks(client: GenClient, report_path: Path, tracer=NOOP_TRACER,
                   operator_patches: dict[str, str] | None = None) -> list[dict]:
-    """Step 1 — the model reads the report file and composes its own task list."""
+    """Step 1 (default path) — the MODEL reads the report file and composes its own task list."""
     report = report_path.read_text(encoding="utf-8")
     operator_patches = operator_patches or {}
     prompt, _ = _resolve_prompt(tracer, "poc-extract", EXTRACT_PROMPT, report=report)
@@ -463,28 +489,23 @@ def extract_tasks(client: GenClient, report_path: Path, tracer=NOOP_TRACER,
     )
     data = json.loads(raw)
     tasks = data.get("tasks", []) if isinstance(data, dict) else data
-    # Keep only well-formed items; fill an id if the model omitted one.
-    out = []
-    for i, t in enumerate(tasks):
-        if not isinstance(t, dict) or not t.get("title"):
-            continue
-        finding = {
-            "id": str(t.get("id") or f"T-{i+1:02d}"),
-            "title": str(t.get("title", "")),
-            "location": str(t.get("location", "")),
-            "description": str(t.get("description", "")),
-        }
-        # feature 010: carry the finding's own fix diff (deterministically pulled
-        # from the report, NOT the model) for post-PASS mutation verification.
-        finding["fix"] = extract_fix_for_finding(report, finding)
-        # feature 025: an operator-supplied patch, if any, for THIS finding. Two keys,
-        # not one, because the two sources differ in KIND: `fix_patch` is a real patch
-        # applied as-is; `fix` is an illustration needing reconstruction. Precedence is
-        # resolved later in `_resolve_fix` (operator wins). This keeps the distinction
-        # structural rather than a runtime guess (FR-004/FR-005).
-        finding["fix_patch"] = operator_patches.get(finding["id"])
-        out.append(finding)
-    return out
+    return _attach_fixes(tasks, report, operator_patches)
+
+
+def load_pinned_tasks(tasks_path: Path, report_path: Path,
+                      operator_patches: dict[str, str] | None = None) -> list[dict]:
+    """Step 1 (feature 028 pinned path) — load a task list from a FILE instead of the model, so the
+    proof-eval proves a fixed, curated finding rather than a re-guessed one. The file uses the same
+    shape the harness writes to `_extracted_tasks.json` (`{id, title, location, description}`). Only
+    the MODEL task-extraction is bypassed: the report is still read so `_attach_fixes` can pull the
+    report's own fix diff (`extract_fix_for_finding`) — `--report` stays required (feature 028
+    A2/FR-004). A malformed/absent file raises `json.JSONDecodeError`/`OSError`, caught by `main()`'s
+    existing extract try/except as a clean `extract_failed` abort (A1)."""
+    operator_patches = operator_patches or {}
+    report_text = Path(report_path).read_text(encoding="utf-8")
+    raw = json.loads(Path(tasks_path).read_text(encoding="utf-8"))
+    tasks = raw.get("tasks", []) if isinstance(raw, dict) else raw
+    return _attach_fixes(tasks, report_text, operator_patches)
 
 
 _SOL_FILE_RE = re.compile(r"[\w./-]+\.sol")
@@ -2530,6 +2551,12 @@ def main() -> None:
                     "extraction still covers the whole report, but only these ids are drafted. "
                     "Takes priority over --limit; case-insensitive.")
     ap.add_argument("--extract-only", action="store_true", help="just print the model's task list and exit")
+    ap.add_argument("--tasks-from", type=Path, default=None,
+                    help="feature 028: PROVE a supplied task list (JSON, the `_extracted_tasks.json` "
+                         "shape) INSTEAD of the model's report extraction — deterministic, no "
+                         "extraction variance. `--report` is still required (the report-fix path "
+                         "reads it). Used by the proof-eval to pin a curated finding; also handy for "
+                         "reproducibly re-running one finding. Default (unset) extracts with the model.")
     ap.add_argument("--max-minutes", type=float, default=0,
                     help="stop starting new findings after this wall-clock budget (0 = no cap). "
                          "Bounds a metered cloud-GPU session — remember to Stop the session after.")
@@ -2663,10 +2690,20 @@ def main() -> None:
     # disabled) so this run's fetches have a versioned baseline to resolve against.
     seed_prompts(tracer)
 
-    # ── Step 1: model builds its own task list from the report ───────────────
-    log({"event": "extract_start", "report": str(args.report), "model": args.model})
+    # ── Step 1: obtain the task list ─────────────────────────────────────────
+    # Default: the MODEL extracts from the report. Feature 028: `--tasks-from` PINS a supplied task
+    # list instead (the proof-eval feeds a curated, deterministic finding). Only the model
+    # extraction is bypassed — `--report` is still required (the report-fix path reads it), and
+    # everything downstream (fix attach, --only, drafting, compile, falsification) is unchanged. The
+    # branch sits INSIDE the try so a malformed --tasks-from file aborts as a clean `extract_failed`,
+    # not a raw traceback (A1). The `extracted` event fires either way, so the proof-eval funnel sees
+    # a pinned finding reach the extraction stage (FR-005).
+    log({"event": "extract_start", "report": str(args.report), "model": args.model,
+         "source": "pinned" if args.tasks_from else "model"})
     try:
-        tasks = extract_tasks(client, args.report, tracer, operator_patches)
+        tasks = (load_pinned_tasks(args.tasks_from, args.report, operator_patches)
+                 if args.tasks_from
+                 else extract_tasks(client, args.report, tracer, operator_patches))
     except (*MODEL_ERRORS, json.JSONDecodeError, OSError) as e:
         log({"event": "extract_failed", "error": str(e)})
         sys.exit(1)

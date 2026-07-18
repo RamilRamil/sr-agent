@@ -11,6 +11,7 @@ bug this class surfaced in this session's live runs would have been caught here)
 """
 from __future__ import annotations
 
+import json
 import types
 from pathlib import Path
 
@@ -159,6 +160,77 @@ def test_loop_budget_stop(tmp_path, monkeypatch):
 
     # only the first finding was processed before the budget tripped on the second.
     assert processed == ["A-01"]
+
+
+# ── Feature 028: --tasks-from PINS a supplied task list (bypasses model extraction) ──
+
+def _drive_main(tmp_path, monkeypatch, extra_argv, *, extract_stub):
+    """Drive main() through its pre-loop seams (like test_loop_budget_stop), stubbing the prove loop.
+    Returns the emitted events (read from the progress jsonl). `extract_stub` replaces extract_tasks."""
+    monkeypatch.setattr(pqr, "_process_finding", lambda task, **k: None)
+    monkeypatch.setattr(pqr, "extract_tasks", extract_stub)
+    monkeypatch.setattr(pqr, "build_file_manifest", lambda *a, **k: "")
+    monkeypatch.setattr(pqr, "DockerSandbox", lambda *a, **k: object())
+    monkeypatch.setattr(pqr, "_harness_sandbox", lambda *a, **k: object())
+
+    class _FakeClient:
+        model = "fake"
+        def __init__(self, *a, **k): pass
+        def warm(self, *a, **k): return True
+        def ready(self, *a, **k): return True
+        def available(self, *a, **k): return True
+        def supports_tools(self, *a, **k): return False
+    monkeypatch.setattr(pqr, "LocalClient", _FakeClient)
+    monkeypatch.setattr(pqr, "Tracer", lambda *a, **k: NOOP_TRACER)
+
+    report = tmp_path / "report.md"; report.write_text("# report", encoding="utf-8")
+    monkeypatch.setenv("POC_PROJECT", str(tmp_path))
+    monkeypatch.setenv("POC_REPORT", str(report))
+    monkeypatch.setattr("sys.argv", ["poc_queue_runner.py", "--no-symbol-index",
+                                     "--attempts", "1"] + extra_argv)
+    pqr.main()
+    log = tmp_path / "audit" / "poc" / "_runner_progress.jsonl"
+    return [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+
+
+def test_tasks_from_bypasses_model_extraction(tmp_path, monkeypatch):
+    """FR-001/FR-005/FR-006-inverse: with --tasks-from, extract_tasks is NEVER called (stub raises),
+    the run still succeeds, and an `extracted` event fires with the file's ids."""
+    tf = tmp_path / "tasks.json"
+    tf.write_text('[{"id":"7","title":"Pinned finding","location":"L","description":"d"}]', encoding="utf-8")
+
+    def _boom(*a, **k):
+        raise AssertionError("extract_tasks must NOT be called when --tasks-from is set")
+
+    events = _drive_main(tmp_path, monkeypatch, ["--tasks-from", str(tf)], extract_stub=_boom)
+    extracted = [e for e in events if e.get("event") == "extracted"]
+    assert extracted and extracted[0]["ids"] == ["7"]        # the file's id, not a model's
+
+
+def test_default_still_extracts_with_model(tmp_path, monkeypatch):
+    """FR-006: WITHOUT --tasks-from the default path is unchanged — extract_tasks IS consulted."""
+    called = {"n": 0}
+
+    def _extract(*a, **k):
+        called["n"] += 1
+        return [{"id": "M-01", "title": "from model", "location": "", "description": "d",
+                 "fix": None, "fix_patch": None}]
+
+    events = _drive_main(tmp_path, monkeypatch, [], extract_stub=_extract)
+    assert called["n"] == 1                                   # the model extractor was used
+    assert any(e.get("event") == "extracted" and e["ids"] == ["M-01"] for e in events)
+
+
+def test_tasks_from_malformed_aborts_cleanly(tmp_path, monkeypatch):
+    """A1/FR-011: a malformed --tasks-from file aborts as a logged `extract_failed` + SystemExit —
+    NOT a raw traceback (the branch is inside main()'s existing try/except)."""
+    tf = tmp_path / "bad.json"; tf.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        _drive_main(tmp_path, monkeypatch, ["--tasks-from", str(tf)],
+                    extract_stub=lambda *a, **k: [])
+    log = tmp_path / "audit" / "poc" / "_runner_progress.jsonl"
+    events = [json.loads(l) for l in log.read_text().splitlines()] if log.exists() else []
+    assert any(e.get("event") == "extract_failed" for e in events)
 
 
 # ── Feature 010 + 025: mutation-verify wiring into the real_pass branch ─────

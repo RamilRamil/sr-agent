@@ -35,6 +35,7 @@ import math
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -63,6 +64,12 @@ class Case:
     report_path: Path
     finding_id: str
     fix_path: Path
+    # feature 028: the curated finding — human ground truth transcribed from the report (like the
+    # discovery benchmark's labels and the operator fix), so the eval PINS a fixed finding instead
+    # of re-running nondeterministic model extraction every run. Required (loud on absent/empty).
+    title: str
+    location: str
+    description: str
 
 
 @dataclass(frozen=True)
@@ -170,15 +177,22 @@ def load_case(case_dir: Path) -> Case:
     if not fix_path.is_file():
         raise ProofBenchError(f"{case_id}: fix_path does not exist: {fix_path}")
 
-    for key in ("target_path", "report_path", "finding_id"):
-        if not m.get(key):
-            raise ProofBenchError(f"{case_id}: missing {key}")
+    # feature 028: the curated finding is REQUIRED (empty == missing) — a case must pin its own
+    # ground-truth finding, never silently fall back to nondeterministic model extraction.
+    for key in ("target_path", "report_path", "finding_id", "title", "location", "description"):
+        if not str(m.get(key, "")).strip():
+            raise ProofBenchError(
+                f"{case_id}: missing {key} — a proof-eval case must carry its curated finding "
+                f"(title/location/description) so it can be pinned; no fallback to model extraction")
     return Case(
         case_id=case_id,
         target_path=_external(Path(m["target_path"]), f"{case_id} target_path"),
         report_path=Path(m["report_path"]).expanduser(),
         finding_id=str(m["finding_id"]),
         fix_path=fix_path,
+        title=str(m["title"]),
+        location=str(m["location"]),
+        description=str(m["description"]),
     )
 
 
@@ -386,32 +400,48 @@ def run_case(case: Case, config: RunConfig, *, image: str | None = None, fork: b
     """Run the harness (BLACK BOX) N times for one case and parse each run's stdout events into a
     CaseOutcome. This is the ONLY function that touches a model/Docker/network and the ONLY thing the
     offline tests stub — everything else (interval, funnel, compare, score) is pure."""
+    # feature 028: PIN the finding. Write the case's curated finding as a single-task file and feed
+    # it via `--tasks-from` (dropping `--only`), so extraction is bypassed and the id AND text are
+    # identical across all N runs — the eval measures the prover's variance, not extraction's. The
+    # one task's id == finding_id == the `--fix-patch` id, so the fix attaches by construction.
+    # The file is target material (carries the finding title/location) → external temp scratch,
+    # cleaned up after the case's runs.
+    task_fd, task_path = tempfile.mkstemp(prefix=f"proofcase-{case.case_id}-", suffix=".json")
+    os.close(task_fd)
+    Path(task_path).write_text(json.dumps([{
+        "id": case.finding_id, "title": case.title,
+        "location": case.location, "description": case.description,
+    }]), encoding="utf-8")
+
     outcomes: list[CaseOutcome] = []
-    for run_idx in range(config.n):
-        argv = [
-            sys.executable, str(_AGENT_ROOT / "scripts" / "poc_queue_runner.py"),
-            "--project", str(case.target_path), "--report", str(case.report_path),
-            "--only", case.finding_id,
-            "--fix-patch", f"{case.finding_id}={case.fix_path}",
-            "--provider", config.provider, "--model", config.model,
-        ]
-        if config.scaffold:
-            argv += ["--test-scaffold", config.scaffold]
-        if config.example:
-            argv += ["--example-poc", config.example]
-        if image:
-            argv += ["--image", image]
-        if fork:
-            argv += ["--fork"]
-        argv += ["--max-minutes", str(max_minutes)]
-        proc = subprocess.run(argv, capture_output=True, text=True)
-        events = _parse_events(proc.stdout)
-        stage = _stage_of(events, case.finding_id)
-        done = next((e for e in reversed(events) if e.get("event") == "task_done"), {})
-        outcomes.append(CaseOutcome(
-            case_id=case.case_id, run_idx=run_idx, stage=stage,
-            outcome=str(done.get("outcome", "")), verify_reason=str(done.get("verify_reason", "")),
-        ))
+    try:
+        for run_idx in range(config.n):
+            argv = [
+                sys.executable, str(_AGENT_ROOT / "scripts" / "poc_queue_runner.py"),
+                "--project", str(case.target_path), "--report", str(case.report_path),
+                "--tasks-from", task_path,
+                "--fix-patch", f"{case.finding_id}={case.fix_path}",
+                "--provider", config.provider, "--model", config.model,
+            ]
+            if config.scaffold:
+                argv += ["--test-scaffold", config.scaffold]
+            if config.example:
+                argv += ["--example-poc", config.example]
+            if image:
+                argv += ["--image", image]
+            if fork:
+                argv += ["--fork"]
+            argv += ["--max-minutes", str(max_minutes)]
+            proc = subprocess.run(argv, capture_output=True, text=True)
+            events = _parse_events(proc.stdout)
+            stage = _stage_of(events, case.finding_id)
+            done = next((e for e in reversed(events) if e.get("event") == "task_done"), {})
+            outcomes.append(CaseOutcome(
+                case_id=case.case_id, run_idx=run_idx, stage=stage,
+                outcome=str(done.get("outcome", "")), verify_reason=str(done.get("verify_reason", "")),
+            ))
+    finally:
+        Path(task_path).unlink(missing_ok=True)   # ephemeral target-material scratch, always removed
     return outcomes
 
 
