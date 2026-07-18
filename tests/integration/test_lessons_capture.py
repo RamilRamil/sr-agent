@@ -53,7 +53,7 @@ def test_resolved_signature_emits_one_candidate(tmp_path, monkeypatch):
     store = _store(tmp_path)
     outcome, names = _run(tmp_path, drafts=[REAL], fixes=[REAL],
                           results=[_COMPILE_ERR, _PASS], store=store, monkeypatch=monkeypatch)
-    assert outcome == "passed"
+    assert outcome == "passed_unchecked"  # feature 025: no fix -> honest unchecked
     assert names.count("lesson_captured") == 1
     pending = store.list_pending()
     assert len(pending) == 1
@@ -70,7 +70,7 @@ def test_identical_resolution_is_deduped_across_runs(tmp_path, monkeypatch):
     # a second finding hits + resolves the SAME signature → no new candidate (SC-001)
     outcome, names = _run(tmp_path, drafts=[REAL], fixes=[REAL],
                           results=[_COMPILE_ERR, _PASS], store=store, monkeypatch=monkeypatch)
-    assert outcome == "passed"
+    assert outcome == "passed_unchecked"  # feature 025: no fix -> honest unchecked
     assert names.count("lesson_captured") == 0
     assert len(store.list_pending()) == 1
 
@@ -84,5 +84,5 @@ def test_capture_failure_does_not_abort_the_run(tmp_path, monkeypatch):
     monkeypatch.setattr(store, "capture", _boom)
     outcome, names = _run(tmp_path, drafts=[REAL], fixes=[REAL],
                           results=[_COMPILE_ERR, _PASS], store=store, monkeypatch=monkeypatch)
-    assert outcome == "passed"                      # run completes despite capture failing
+    assert outcome == "passed_unchecked"            # feature 025; run completes despite capture failing
     assert "lesson_capture_error" in names          # the failure was swallowed + logged

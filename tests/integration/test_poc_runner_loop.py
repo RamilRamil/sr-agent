@@ -14,6 +14,8 @@ from __future__ import annotations
 import types
 from pathlib import Path
 
+import pytest
+
 import scripts.poc_queue_runner as pqr
 from sr_agent.eval.tracer import NOOP_TRACER
 from sr_agent.packs.audit.tools.write_execute import TestResult as _ForgeResult
@@ -70,11 +72,14 @@ _COMPILE_ERR = _ForgeResult(passed=False, exit_code=1,
 def test_loop_clean_pass(tmp_path, monkeypatch):
     """First draft is structurally real and the run passes → outcome 'passed'."""
     outcome, events = _run(TASK, tmp_path, drafts=[REAL], fixes=[], results=[_PASS], monkeypatch=monkeypatch)
-    assert outcome == "passed"
+    # feature 025: TASK carries no fix, so falsification cannot run -> passed_unchecked (honest),
+    # not the old bare "passed" that hid whether verification happened.
+    assert outcome == "passed_unchecked"
     names = _evnames(events)
     assert names[0] == "task_start"
     assert "tested" in names
-    assert events[-1]["event"] == "task_done" and events[-1]["outcome"] == "passed"
+    assert events[-1]["event"] == "task_done" and events[-1]["outcome"] == "passed_unchecked"
+    assert events[-1]["verify_reason"] == "no_fix"
 
 
 def test_loop_vacuous_pass_rejected(tmp_path, monkeypatch):
@@ -96,7 +101,7 @@ def test_loop_compile_error_then_repair(tmp_path, monkeypatch):
         TASK, tmp_path, drafts=[REAL], fixes=[REAL], results=[_COMPILE_ERR, _PASS],
         attempts=3, monkeypatch=monkeypatch,
     )
-    assert outcome == "passed"
+    assert outcome == "passed_unchecked"  # feature 025: no fix in TASK -> honest unchecked
     names = _evnames(events)
     assert names.count("written") == 2  # two attempts written
     assert names.count("tested") == 2
@@ -156,13 +161,16 @@ def test_loop_budget_stop(tmp_path, monkeypatch):
     assert processed == ["A-01"]
 
 
-# ── Feature 010: mutation-verify wiring into the real_pass branch ───────────
+# ── Feature 010 + 025: mutation-verify wiring into the real_pass branch ─────
 # mutation_verify's internals (extract/apply/classify) are unit-tested in
 # test_poc_queue_runner.py; here we test that the LOOP consults it exactly on a
-# genuine PASS and applies its verdict — verified/unavailable keep `passed`, only
-# unverified_pass downgrades.
+# genuine PASS and maps its (status, reason) verdict to the reported outcome.
+# Feature 025 split the outcome so "verified" and "could not check" stop reading
+# the same: verified -> passed_verified; unavailable(reason) -> passed_unchecked
+# carrying the reason; unverified_pass (proof survived the fix) -> unchanged.
 
 def _run_with_mutverify(task, project, *, results, verdict, monkeypatch, attempts=2):
+    # `verdict` is the (status, reason) tuple mutation_verify now returns (feature 025).
     result_q = list(results)
     monkeypatch.setattr(pqr, "draft", lambda *a, **k: REAL)
     monkeypatch.setattr(pqr, "fix", lambda *a, **k: REAL)
@@ -182,29 +190,55 @@ def _run_with_mutverify(task, project, *, results, verdict, monkeypatch, attempt
     return outcome, events, calls["n"]
 
 
-def test_loop_mutation_verified_keeps_passed(tmp_path, monkeypatch):
-    """A genuine PASS whose PoC then FAILS on the applied fix stays `passed`."""
+def test_loop_mutation_verified_marks_passed_verified(tmp_path, monkeypatch):
+    """US1 scenario 1: a genuine PASS whose PoC then FAILS on the applied fix is
+    `passed_verified` — falsification ran and the proof depends on the bug."""
     task = {"id": "H-01", "title": "silo padding", "location": "", "description": "d", "fix": "DIFF"}
-    outcome, events, n = _run_with_mutverify(task, tmp_path, results=[_PASS], verdict="verified", monkeypatch=monkeypatch)
-    assert outcome == "passed"
+    outcome, events, n = _run_with_mutverify(
+        task, tmp_path, results=[_PASS], verdict=("verified", ""), monkeypatch=monkeypatch)
+    assert outcome == "passed_verified"
     assert n == 1  # consulted exactly once, on the pass
 
 
 def test_loop_mutation_unverified_downgrades(tmp_path, monkeypatch):
-    """The 2026-07-06 false-positive class: a PASS that STILL passes on the fix is
-    downgraded to `unverified_pass`, not reported as success (SC-001)."""
+    """US1 scenario 3: the 2026-07-06 false-positive class — a PASS that STILL passes
+    on the fix stays `unverified_pass`, string and behavior unchanged (FR-003)."""
     task = {"id": "H-01", "title": "silo padding", "location": "", "description": "d", "fix": "DIFF"}
-    outcome, events, n = _run_with_mutverify(task, tmp_path, results=[_PASS], verdict="unverified_pass", monkeypatch=monkeypatch)
+    outcome, events, n = _run_with_mutverify(
+        task, tmp_path, results=[_PASS], verdict=("unverified_pass", ""), monkeypatch=monkeypatch)
     assert outcome == "unverified_pass"
     assert events[-1]["outcome"] == "unverified_pass"
 
 
-def test_loop_mutation_unavailable_keeps_passed(tmp_path, monkeypatch):
-    """When verification is unavailable (no fix / won't apply), the pass is kept —
-    never a false downgrade (SC-003)."""
+@pytest.mark.parametrize("reason",
+                         ["no_fix", "reconstruction_refused", "patch_failed", "patched_no_build", "infra"])
+def test_loop_mutation_unavailable_marks_unchecked_with_reason(tmp_path, monkeypatch, reason):
+    """US1 scenario 2 + 4 (FR-002, FR-009, SC-006): every inability-to-verify reason yields
+    `passed_unchecked` carrying that reason — never a failure, never a false downgrade."""
     task = {"id": "H-01", "title": "silo padding", "location": "", "description": "d", "fix": None}
-    outcome, events, n = _run_with_mutverify(task, tmp_path, results=[_PASS], verdict="unavailable", monkeypatch=monkeypatch)
-    assert outcome == "passed"
+    outcome, events, n = _run_with_mutverify(
+        task, tmp_path, results=[_PASS], verdict=("unavailable", reason), monkeypatch=monkeypatch)
+    assert outcome == "passed_unchecked"
+    assert events[-1]["outcome"] == "passed_unchecked"
+    assert events[-1]["verify_reason"] == reason
+
+
+def test_loop_passed_variants_are_not_quarantined(tmp_path, monkeypatch):
+    """US1 trap test (research Decision 2): the quarantine gate keyed on the literal `"passed"`,
+    so the outcome split must update it or every successful PoC lands in poc_failed/. Both
+    passed_verified and passed_unchecked stay OUT; unverified_pass stays IN."""
+    task = {"id": "H-01", "title": "t", "location": "", "description": "d", "fix": "DIFF"}
+    for verdict, expect in [(("verified", ""), "passed_verified"),
+                            (("unavailable", "no_fix"), "passed_unchecked")]:
+        outcome, events, _ = _run_with_mutverify(
+            task, tmp_path, results=[_PASS], verdict=verdict, monkeypatch=monkeypatch)
+        assert outcome == expect
+        assert not any(e["event"] == "quarantined" for e in events)
+    # a proof that survives its own fix proves nothing → it IS quarantined
+    outcome, events, _ = _run_with_mutverify(
+        task, tmp_path, results=[_PASS], verdict=("unverified_pass", ""), monkeypatch=monkeypatch)
+    assert outcome == "unverified_pass"
+    assert any(e["event"] == "quarantined" for e in events)
 
 
 def test_loop_mutation_not_consulted_on_non_pass(tmp_path, monkeypatch):
@@ -212,7 +246,7 @@ def test_loop_mutation_not_consulted_on_non_pass(tmp_path, monkeypatch):
     finding never consults it."""
     task = {"id": "H-01", "title": "t", "location": "", "description": "d", "fix": "DIFF"}
     _, _, n = _run_with_mutverify(
-        task, tmp_path, results=[_COMPILE_ERR, _COMPILE_ERR], verdict="verified",
+        task, tmp_path, results=[_COMPILE_ERR, _COMPILE_ERR], verdict=("verified", ""),
         monkeypatch=monkeypatch, attempts=2)
     assert n == 0  # never consulted — the finding never passed
 
@@ -240,7 +274,7 @@ def _run_synth(task, project, *, missing, synth_returns, monkeypatch):
     monkeypatch.setattr(pqr, "synthesize_scaffold", _fake_synth)
     monkeypatch.setattr(pqr, "draft", lambda *a, **k: REAL)
     monkeypatch.setattr(pqr, "run_tests", lambda *a, **k: _PASS)
-    monkeypatch.setattr(pqr, "mutation_verify", lambda *a, **k: "unavailable")
+    monkeypatch.setattr(pqr, "mutation_verify", lambda *a, **k: ("unavailable", "no_fix"))
     events = []
     outcome = pqr._process_finding(
         task, args=_args(project, 1), client=object(), sandbox=object(),

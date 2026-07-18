@@ -51,6 +51,7 @@ from sr_agent.tools.sandbox import DockerSandbox, SandboxUnavailable
 from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 
+from scripts.patch_reconstruct import ReconstructionRefused, reconstruct
 from scripts.solidity_index import SymbolIndex, expand_referenced_types
 
 # Any model-transport failure — local (Ollama) OR hosted (Gemini/OpenRouter). The
@@ -449,9 +450,11 @@ def _extract_solidity(text: str) -> str:
     return "\n".join(lines[start:end + 1]).strip()
 
 
-def extract_tasks(client: GenClient, report_path: Path, tracer=NOOP_TRACER) -> list[dict]:
+def extract_tasks(client: GenClient, report_path: Path, tracer=NOOP_TRACER,
+                  operator_patches: dict[str, str] | None = None) -> list[dict]:
     """Step 1 — the model reads the report file and composes its own task list."""
     report = report_path.read_text(encoding="utf-8")
+    operator_patches = operator_patches or {}
     prompt, _ = _resolve_prompt(tracer, "poc-extract", EXTRACT_PROMPT, report=report)
     raw = client.generate(
         prompt,
@@ -474,6 +477,12 @@ def extract_tasks(client: GenClient, report_path: Path, tracer=NOOP_TRACER) -> l
         # feature 010: carry the finding's own fix diff (deterministically pulled
         # from the report, NOT the model) for post-PASS mutation verification.
         finding["fix"] = extract_fix_for_finding(report, finding)
+        # feature 025: an operator-supplied patch, if any, for THIS finding. Two keys,
+        # not one, because the two sources differ in KIND: `fix_patch` is a real patch
+        # applied as-is; `fix` is an illustration needing reconstruction. Precedence is
+        # resolved later in `_resolve_fix` (operator wins). This keeps the distinction
+        # structural rather than a runtime guess (FR-004/FR-005).
+        finding["fix_patch"] = operator_patches.get(finding["id"])
         out.append(finding)
     return out
 
@@ -1674,25 +1683,33 @@ _MUTVERIFY_COPY_SKIP = shutil.ignore_patterns("out", "cache_forge", ".git", "nod
 
 
 def mutation_verify(project: Path, task: dict, poc_rel_path: str, sandbox, log,
-                    *, fork_rpc=None, image=None) -> str:
+                    *, fork_rpc=None, image=None) -> tuple[str, str]:
     """Post-PASS verification (feature 010 contracts/mutation-verify.md). Called
-    ONLY from `_process_finding`'s real_pass branch. Returns one of "verified",
-    "unverified_pass", "unavailable". Never mutates the real target tree (FR-004):
-    all work is on a temp copy, deleted in `finally`. Never downgrades on an
-    inability to verify (FR-005/FR-006): only a real test FAILURE on a BUILT patched
-    source yields "unverified_pass"."""
+    ONLY from `_process_finding`'s real_pass branch. Returns `(status, reason)`:
+    status is "verified" / "unverified_pass" / "unavailable"; reason is "" for the
+    first two, and one of "no_fix" / "reconstruction_refused" / "patch_failed" /
+    "patched_no_build" / "infra" when status is "unavailable" (feature 025 FR-002 —
+    the reason was always logged but never returned, so the caller could not tell
+    "we could not check" apart from "we checked"). Never mutates the real target
+    tree: all work is on a temp copy, deleted in `finally`. Never downgrades on an
+    inability to verify (FR-006): only a real test FAILURE on a BUILT patched source
+    yields "unverified_pass".
+
+    Fix precedence (feature 025 FR-005): an operator-supplied `fix_patch` (a REAL
+    patch, applied as-is) wins over the report's illustrative `fix` (which needs
+    reconstruction). Resolving here off the task keeps this signature unchanged."""
     fid = task.get("id", "?")
-    fix = task.get("fix")
-    if not fix:
-        log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": "no_fix"})
-        return "unavailable"
+    fix, why = _resolve_fix(project, task, log, fid)
+    if fix is None:
+        log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": why})
+        return "unavailable", why
     copy_root = Path(tempfile.mkdtemp(prefix="mutverify-"))
     copy = copy_root / project.name
     try:
         shutil.copytree(project, copy, ignore=_MUTVERIFY_COPY_SKIP, symlinks=True)
         if not _git_apply(copy, fix):
             log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": "patch_failed"})
-            return "unavailable"
+            return "unavailable", "patch_failed"
         try:
             test = run_tests(
                 copy, sandbox, test_path=poc_rel_path, foundry_test_dir=POC_SUBDIR,
@@ -1702,17 +1719,69 @@ def mutation_verify(project: Path, task: dict, poc_rel_path: str, sandbox, log,
         except Exception as e:  # SandboxUnavailable, timeout, … — infra, not a failure
             log({"event": "mutation_verify_unavailable", "finding_id": fid,
                  "reason": "infra", "error": str(e)[:200]})
-            return "unavailable"
+            return "unavailable", "infra"
         if not _compiled(test.stdout, test.stderr):
             log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": "patched_no_build"})
-            return "unavailable"
+            return "unavailable", "patched_no_build"
         if test.passed:
             log({"event": "mutation_unverified", "finding_id": fid})
-            return "unverified_pass"
+            return "unverified_pass", ""
         log({"event": "mutation_verified", "finding_id": fid})
-        return "verified"
+        return "verified", ""
     finally:
         shutil.rmtree(copy_root, ignore_errors=True)
+
+
+_AGENT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _parse_fix_patches(specs: list[str]) -> dict[str, str]:
+    """Parse `--fix-patch ID=PATH` specs into `{finding_id: patch_text}` (feature 025).
+
+    Each PATH must exist and resolve OUTSIDE the agent repo — operator patches are
+    target-specific material and never live in this repo (FR-015). Read at parse time so a
+    bad path fails fast, before any model call."""
+    out: dict[str, str] = {}
+    for spec in specs:
+        if "=" not in spec:
+            print(f"--fix-patch expects ID=PATH, got: {spec!r}", file=sys.stderr)
+            sys.exit(2)
+        fid, raw = spec.split("=", 1)
+        p = Path(raw).expanduser().resolve()
+        if p == _AGENT_ROOT or _AGENT_ROOT in p.parents:
+            print(f"--fix-patch PATH must be OUTSIDE the agent repo (target material): {p}",
+                  file=sys.stderr)
+            sys.exit(2)
+        if not p.is_file():
+            print(f"--fix-patch PATH not found: {p}", file=sys.stderr)
+            sys.exit(2)
+        out[fid.strip()] = p.read_text(encoding="utf-8")
+    return out
+
+
+def _resolve_fix(project: Path, task: dict, log, fid: str) -> tuple[str | None, str]:
+    """Pick the falsification patch for a finding (feature 025). Precedence:
+    an operator-supplied `fix_patch` (a genuine patch, applied AS-IS — never
+    reconstructed, FR-004) over the report's illustrative `fix` (which is turned
+    into a real patch by `patch_reconstruct`). Returns `(patch_text, "")` on
+    success, or `(None, reason)` when nothing is usable — the human is the higher
+    authority, so their patch wins whenever present (FR-005)."""
+    patch = task.get("fix_patch")
+    if patch:
+        return patch, ""
+    fix = task.get("fix")
+    if not fix:
+        return None, "no_fix"
+    # A report `fix` is an ILLUSTRATION, not an applyable patch — reconstruct it
+    # against the real target source. Refuse (never guess) on any uncertainty.
+    def _read(rel: str) -> str | None:
+        p = project / rel
+        return p.read_text(encoding="utf-8", errors="replace") if p.is_file() else None
+    try:
+        return reconstruct(fix, _read), ""
+    except ReconstructionRefused as e:
+        log({"event": "reconstruction_refused", "finding_id": fid, "reason": e.reason})
+        return None, "reconstruction_refused"
 
 
 # ── Agentic lookup round-trip (feature 007 text-marker + feature 008 tool-calling) ──
@@ -2224,6 +2293,7 @@ def _process_finding(
         log({"event": "postfix_scaffold_base", "finding_id": fid, "stage": "draft"})
 
     outcome = "unknown"
+    verify_reason = ""            # feature 025: why falsification didn't run (passed_unchecked)
     res = None
     prev_error_sig: tuple | None = None
     prev_code: str | None = None
@@ -2279,14 +2349,26 @@ def _process_finding(
             prev_fail_sig=prev_fail_sig, real_pass=real_pass, compiled=compiled,
             prev_symptom=prev_symptom, prev_code=prev_code, code=code)
         if real_pass:
-            outcome = "passed"                     # full success: green + real
             # feature 010: a forge PASS isn't trustworthy until we've shown it
             # DEPENDS on the bug — re-run this same PoC against the finding's own
             # fix applied to an ephemeral source copy. Still passes on the fix →
             # it wasn't testing the exploit → downgrade to unverified_pass.
-            if mutation_verify(args.project, task, rel, sandbox, log,
-                               fork_rpc=fork_rpc, image=args.image) == "unverified_pass":
-                outcome = "unverified_pass"
+            #
+            # feature 025: three distinct outcomes, so "we verified it" and "we
+            # could not check" stop reading the same. `passed_unchecked` is
+            # deliberately NOT named near `unverified_pass` — that legacy name
+            # means the OPPOSITE ("we CHECKED, and the proof survived the fix",
+            # i.e. it proves nothing), and conflating the two is the very trap
+            # this feature removes (research Decision 1).
+            status, reason = mutation_verify(args.project, task, rel, sandbox, log,
+                                             fork_rpc=fork_rpc, image=args.image)
+            if status == "verified":
+                outcome = "passed_verified"        # falsification ran; proof broke on the fix
+            elif status == "unverified_pass":
+                outcome = "unverified_pass"         # checked; proof survived the fix → bogus
+            else:  # "unavailable" — could not check; carry WHY
+                outcome = "passed_unchecked"
+                verify_reason = reason
             break
         if compiled_real and not require_pass_effective:
             outcome = "compiled"                   # path-A success: builds + real (fork deferred)
@@ -2384,15 +2466,21 @@ def _process_finding(
     # run failed on H-01's stale import error, not its own). Quarantine any
     # non-COMPILING PoC out of poc_dir so later findings aren't blocked by it.
     # A "compiled" (path-A) PoC stays: it builds, so it never blocks a later compile.
-    if outcome not in ("passed", "compiled") and res is not None:
+    # feature 025: the success set splits `passed` into passed_verified/passed_unchecked —
+    # both build and both stay out of quarantine. `unverified_pass` is NOT here on purpose:
+    # a proof that survives its own fix proves nothing and belongs with the failures.
+    if outcome not in ("passed_verified", "passed_unchecked", "compiled") and res is not None:
         quarantine_dir = poc_dir.parent / "poc_failed"
         quarantine_dir.mkdir(parents=True, exist_ok=True)
         dest = quarantine_dir / res.path.name
         res.path.replace(dest)
         log({"event": "quarantined", "finding_id": fid, "path": str(dest.relative_to(args.project))})
 
-    log({"event": "task_done", "finding_id": fid, "outcome": outcome,
-         "elapsed_s": round(time.time() - started, 1)})
+    done = {"event": "task_done", "finding_id": fid, "outcome": outcome,
+            "elapsed_s": round(time.time() - started, 1)}
+    if verify_reason:                     # feature 025: state WHY falsification didn't run
+        done["verify_reason"] = verify_reason
+    log(done)
     return outcome
 
 
@@ -2457,7 +2545,15 @@ def main() -> None:
                          "this keeps the honest-experiment behavior (insufficient scaffold, "
                          "no synthesized infra). Synthesis is ON by default (fires only on "
                          "detected insufficiency, always falls back honestly).")
+    ap.add_argument("--fix-patch", action="append", default=[], metavar="ID=PATH",
+                    help="operator-supplied falsification patch for a finding (feature 025): "
+                         "a REAL, applyable patch used AS-IS, taking precedence over the report's "
+                         "illustrative fix. Repeatable. PATH must be OUTSIDE the agent repo (target "
+                         "material). Removes the report channel's ceiling — works for any finding, "
+                         "including leads that never carry a report fix.")
     args = ap.parse_args()
+
+    operator_patches = _parse_fix_patches(args.fix_patch)
 
     fork_rpc = None
     if args.fork:
@@ -2545,7 +2641,7 @@ def main() -> None:
     # ── Step 1: model builds its own task list from the report ───────────────
     log({"event": "extract_start", "report": str(args.report), "model": args.model})
     try:
-        tasks = extract_tasks(client, args.report, tracer)
+        tasks = extract_tasks(client, args.report, tracer, operator_patches)
     except (*MODEL_ERRORS, json.JSONDecodeError, OSError) as e:
         log({"event": "extract_failed", "error": str(e)})
         sys.exit(1)
