@@ -874,6 +874,11 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
     synth_dir = project / _SYNTH_SUBDIR
     synth_dir.mkdir(parents=True, exist_ok=True)
     synth_path = synth_dir / f"{name}.sol"
+    # The model computes the parent-scaffold / missing-type import paths relative to the source it
+    # was SHOWN (which sits at a different depth), so they land off by one `../` — the synth base
+    # lives at audit/poc/_synth/, deeper than audit/poc/. We know the real paths: rewrite them to the
+    # exact relpath from the synth file's OWN dir (deterministic; not the model's job to count `../`).
+    code, _ = _fix_import_paths(code, project, base_dir=synth_dir)
     synth_path.write_text(code, encoding="utf-8")
 
     # Compile-validate: a minimal test that INHERITS the base — if the base's imports,
@@ -1211,14 +1216,20 @@ def _fix_setup_override(code: str) -> tuple[str, bool]:
     return code2, True
 
 
-def _fix_import_paths(code: str, project: Path) -> tuple[str, bool]:
+def _fix_import_paths(code: str, project: Path, base_dir: Path | None = None) -> tuple[str, bool]:
     """Fix mechanical codegen issues, LINE BY LINE so non-import lines are never
     touched: (a) a bare `SPDX-License-Identifier` line missing its `//` (a 2314
     syntax error), and (b) an import with the right target but wrong relative depth
     (`../../../` vs `../../`) — we know the real paths, so rewrite to the exact
-    relpath from audit/poc/. Remapped/library imports (@openzeppelin/…, forge-std/…)
-    are left as-is; git-tracked (original) files are preferred."""
-    poc_dir = project / POC_SUBDIR
+    relpath from the importing file's dir. Remapped/library imports (@openzeppelin/…,
+    forge-std/…) are left as-is; git-tracked (original) files are preferred.
+
+    `base_dir` is the directory the imports are relative TO — defaults to audit/poc/
+    (where drafted PoCs live). The scaffold-synthesis base lives a level deeper
+    (audit/poc/_synth/), so a model-written parent-scaffold/missing-type import is
+    off by one `../`; passing `base_dir=synth_dir` rewrites it to the right depth
+    (GLM-5.2 live: the only scaffold-synthesis failure was exactly this off-by-one)."""
+    poc_dir = base_dir if base_dir is not None else project / POC_SUBDIR
     tracked = _tracked_sol(project)
     changed = False
     out: list[str] = []
