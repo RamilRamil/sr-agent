@@ -47,7 +47,7 @@ from sr_agent.llm_core.openrouter_client import (
     OpenRouterClient,
     OpenRouterUnavailable,
 )
-from sr_agent.tools.sandbox import DockerSandbox, SandboxUnavailable
+from sr_agent.tools.sandbox import DockerSandbox, Mount, SandboxUnavailable
 from sr_agent.packs.audit.tools.write_execute import run_tests, write_poc
 from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 
@@ -1708,6 +1708,25 @@ def _git_apply(copy_dir: Path, diff: str) -> bool:
 # otherwise unchanged: ephemeral copy, same PoC re-run, real target tree never mutated.
 _MUTVERIFY_COPY_SKIP = shutil.ignore_patterns(".git", "node_modules")
 
+# Dependency dirs the copytree skips for size but the patched build still needs to resolve imports.
+# foundry.toml lists `node_modules` as a `libs` source (targets import `@openzeppelin/...` from it).
+_MUTVERIFY_DEP_DIRS = ("node_modules",)
+
+
+def _dep_mounts(project: Path) -> list[Mount]:
+    """Read-only mounts grafting the skipped dependency dirs (feature 027 follow-up) into the
+    mutation-verify container at their /work-relative paths, so the patched build resolves imports
+    from them WITHOUT deep-copying 650MB per verify. Mounting (not a copy-side symlink) is the only
+    thing that works: the container sees only the mount, never the host path a symlink would target,
+    so a host-path symlink into the copy dangles inside the container -> `patched_no_build`. Deps are
+    read-only (the fix touches only `contracts/`), so a `read_only=True` mount is both safe and correct."""
+    mounts = []
+    for name in _MUTVERIFY_DEP_DIRS:
+        src = project / name
+        if src.is_dir():
+            mounts.append(Mount(host_path=src, container_path=f"/work/{name}", read_only=True))
+    return mounts
+
 
 def mutation_verify(project: Path, task: dict, poc_rel_path: str, sandbox, log,
                     *, fork_rpc=None, image=None) -> tuple[str, str]:
@@ -1734,6 +1753,12 @@ def mutation_verify(project: Path, task: dict, poc_rel_path: str, sandbox, log,
     copy = copy_root / project.name
     try:
         shutil.copytree(project, copy, ignore=_MUTVERIFY_COPY_SKIP, symlinks=True)
+        # Feature 027 follow-up: the copy skips `node_modules` (650MB), but foundry.toml lists it as a
+        # `libs` source — the target imports `@openzeppelin/...` from it, so a deep-copy-less patched
+        # build fails to resolve those and returns `patched_no_build`. This surfaced only once
+        # mutation_verify finally RAN (spec 025+027+028): the copy was build-INCOMPLETE, the same class
+        # as 027's out/cache_forge. The fix is to MOUNT the original deps read-only into the container
+        # (see `_dep_mounts`), not copy or symlink them — the applied fix touches only `contracts/`.
         if not _git_apply(copy, fix):
             log({"event": "mutation_verify_unavailable", "finding_id": fid, "reason": "patch_failed"})
             return "unavailable", "patch_failed"
@@ -1741,7 +1766,8 @@ def mutation_verify(project: Path, task: dict, poc_rel_path: str, sandbox, log,
             test = run_tests(
                 copy, sandbox, test_path=poc_rel_path, foundry_test_dir=POC_SUBDIR,
                 timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
-                fork_rpc=fork_rpc, **({"image": image} if image else {}),
+                fork_rpc=fork_rpc, extra_mounts=_dep_mounts(project),
+                **({"image": image} if image else {}),
             )
         except Exception as e:  # SandboxUnavailable, timeout, … — infra, not a failure
             log({"event": "mutation_verify_unavailable", "finding_id": fid,

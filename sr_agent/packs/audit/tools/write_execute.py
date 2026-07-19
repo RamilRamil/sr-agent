@@ -112,6 +112,7 @@ def run_tests(
     timeout_s: float = 180.0,
     foundry_test_dir: str | None = None,
     fork_rpc: str | None = None,
+    extra_mounts: list[Mount] | None = None,
 ) -> TestResult:
     """Run `forge test` inside the network-isolated sandbox.
 
@@ -156,6 +157,13 @@ def run_tests(
     # isolation comes from --network none + ephemeral container + dropped caps
     # (relaxed to `bridge` only for an explicit fork run).
     mounts = [Mount(host_path=project_dir, container_path="/work", read_only=False)]
+    # `extra_mounts` (opt-in) lets a caller graft read-only dependency trees into the
+    # container without copying them into project_dir — e.g. a mutation-verify copy that
+    # skipped a 650MB `node_modules` needs the original mounted at /work/node_modules so
+    # forge resolves `@openzeppelin/...` imports. A host-path symlink cannot work here: the
+    # container only sees the mount, not the host filesystem the link would point at.
+    if extra_mounts:
+        mounts.extend(extra_mounts)
     result = sandbox.run(
         image, command, mounts=mounts, workdir="/work", timeout_s=timeout_s,
         network="bridge" if forking else "none",
