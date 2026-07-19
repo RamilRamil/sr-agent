@@ -881,7 +881,11 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
     poc_dir = project / POC_SUBDIR
     poc_dir.mkdir(parents=True, exist_ok=True)
     smoke = poc_dir / "_synth_smoke.t.sol"
-    smoke_import = os.path.relpath(synth_path, poc_dir)
+    # A `./`-prefixed RELATIVE import (resolved against the importing file's dir), not a bare
+    # `_synth/…` one: Solidity resolves a bare path from the project base-path (`/work`), so
+    # `import "_synth/SynthBase_1.sol"` was searched at `/work/_synth/…` and 404'd even though the
+    # file sits at `/work/audit/poc/_synth/…` — the synthesis then always failed `no_build`.
+    smoke_import = "./" + os.path.relpath(synth_path, poc_dir)
     smoke.write_text(
         "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.28;\n"
         f'import {{ {name} }} from "{smoke_import}";\n'

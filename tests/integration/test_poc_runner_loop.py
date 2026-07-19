@@ -153,7 +153,11 @@ def test_loop_budget_stop(tmp_path, monkeypatch):
     report.write_text("# report", encoding="utf-8")
     monkeypatch.setenv("POC_PROJECT", str(tmp_path))
     monkeypatch.setenv("POC_REPORT", str(report))
-    monkeypatch.setattr("sys.argv", ["poc_queue_runner.py", "--no-symbol-index",
+    # --provider local: this test drives the loop through the monkeypatched _FakeClient
+    # (LocalClient), independent of main()'s default provider (now gemini, which would abort
+    # on a missing key before the loop).
+    monkeypatch.setattr("sys.argv", ["poc_queue_runner.py", "--provider", "local",
+                                     "--no-symbol-index",
                                      "--attempts", "1", "--max-minutes", "1"])
 
     pqr.main()
@@ -186,7 +190,10 @@ def _drive_main(tmp_path, monkeypatch, extra_argv, *, extract_stub):
     report = tmp_path / "report.md"; report.write_text("# report", encoding="utf-8")
     monkeypatch.setenv("POC_PROJECT", str(tmp_path))
     monkeypatch.setenv("POC_REPORT", str(report))
-    monkeypatch.setattr("sys.argv", ["poc_queue_runner.py", "--no-symbol-index",
+    # --provider local: drive the loop via the monkeypatched _FakeClient, independent of the
+    # default provider (now gemini, which aborts pre-loop on a missing key).
+    monkeypatch.setattr("sys.argv", ["poc_queue_runner.py", "--provider", "local",
+                                     "--no-symbol-index",
                                      "--attempts", "1"] + extra_argv)
     pqr.main()
     log = tmp_path / "audit" / "poc" / "_runner_progress.jsonl"
