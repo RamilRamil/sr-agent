@@ -79,8 +79,10 @@ class ProviderStartupError(Exception):
 def build_generation_client(provider: str, model: str, host: str, timeout: float) -> GenClient:
     """Build the client that drives the batch. Empty `model` → the provider default."""
     if provider == "openrouter":
+        # Thread the caller's timeout (GEN_TIMEOUT_S) through — a slow free/large hosted model
+        # (e.g. a 550B :free endpoint) can exceed the client's 120s default and time out mid-draft.
         return OpenRouterClient(api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-                                model=model or OPENROUTER_MODELS[0])
+                                model=model or OPENROUTER_MODELS[0], timeout_s=timeout)
     if provider == "gemini":
         return GeminiClient(api_key=os.environ.get("GEMINI_API_KEY", ""),
                             model=model or SIMPLE_MODELS[0])
@@ -2562,8 +2564,8 @@ def main() -> None:
                     help="Foundry project root of the EXTERNAL target (or env POC_PROJECT). Never hardcoded here.")
     ap.add_argument("--report", type=Path, default=os.environ.get("POC_REPORT"), required="POC_REPORT" not in os.environ,
                     help="audit report file the model reads (or env POC_REPORT), inside the external target.")
-    ap.add_argument("--provider", choices=["local", "openrouter", "gemini"], default="local",
-                    help="model provider (hosted=opt-in, key from env, marker protocol)")
+    ap.add_argument("--provider", choices=["local", "openrouter", "gemini"], default="gemini",
+                    help="model provider (default gemini — we never run locally; local kept only for opt-in debugging)")
     # Default "" (not MODEL): a hosted provider falls back to ITS default model, not the local slug.
     ap.add_argument("--model", default="", help="override the provider's default model")
     ap.add_argument("--image", default=None,
