@@ -108,6 +108,31 @@ def test_loop_compile_error_then_repair(tmp_path, monkeypatch):
     assert names.count("tested") == 2
 
 
+def test_loop_revert_hints_carries_trace(tmp_path, monkeypatch):
+    """Feature 029 (US3/FR-008): a compiled-but-failed attempt whose forge stdout carries a -vvv
+    trace produces a `revert_hints` event marked `with_trace` and containing the trace. Needs
+    require_pass so a compiled attempt is not accepted before the exploit actually triggers.
+    SYNTHETIC trace, invented names — no target material."""
+    trace_stdout = (
+        "Ran 2 tests for test/Exploit.t.sol:ExploitTest\n"
+        "[FAIL: gate blocks the caller] testExploit() (gas: 8772)\n"
+        "Traces:\n  [8772] ExploitTest::testExploit()\n"
+        "    ├─ [549] DemoVault::gate() [staticcall]\n"
+        "    │   └─ ← [Revert] gate blocks the caller\n"
+        "    └─ ← [Revert] gate blocks the caller\n\n"
+        "Backtrace:\n  at DemoVault.gate\n\n"
+        "[PASS] testSetup() (gas: 7746)\n"
+        "Suite result: FAILED. 1 passed; 1 failed; 0 skipped\n")
+    reverted = _ForgeResult(passed=False, exit_code=1, stdout=trace_stdout, stderr="")
+    outcome, events = _run(
+        TASK, tmp_path, drafts=[REAL], fixes=[REAL],
+        results=[reverted, _PASS], attempts=2, require_pass=True, monkeypatch=monkeypatch)
+    rh = [e for e in events if e["event"] == "revert_hints"]
+    assert rh, "a compiled-but-failed attempt must emit a revert_hints event"
+    assert rh[0]["with_trace"] is True
+    assert "EXECUTION TRACE" in rh[0]["hints"] and "DemoVault::gate()" in rh[0]["hints"]
+
+
 def test_loop_stall_exhausts(tmp_path, monkeypatch):
     """Every attempt returns the identical compile error → a stall is detected and
     the finding ends 'exhausted'."""

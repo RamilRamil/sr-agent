@@ -1594,6 +1594,47 @@ def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: s
 
 _FAIL_LINE_RE = re.compile(r"\[FAIL[:.][^\n]*")
 
+# Feature 029: budget for the forge-trace excerpt folded into revert_hints. Bounded like
+# build_callable_api's output so a deep fork call tree can't blow the prompt / crowd out the
+# finding text. A fixed constant (no operator flag — spec 029 Assumption).
+TRACE_EXCERPT_BUDGET = 2500
+
+# A failing-test trace block (forge -vvv) runs from its `[FAIL…]` header until the next test-result
+# or run-summary line. `-vvv` traces ONLY failing tests, so passing-test traces are absent already.
+_TRACE_BLOCK_END_RE = re.compile(r"^\s*(\[PASS\]|\[FAIL[:.]|Suite result:|Ran \d+ test|Compiling |Warning )")
+
+
+def _trace_excerpt(stdout: str, budget: int = TRACE_EXCERPT_BUDGET) -> str:
+    """Extract the failing test(s') forge `-vvv` trace region(s) — the `[FAIL…]` header, the `Traces:`
+    call tree, and the `Backtrace:` — from a compiled-but-failed run's stdout, bounded to `budget`
+    chars (feature 029). Returns "" when there is no `[FAIL…]` line or no trace block (drives the
+    graceful degradation in revert_hints). Anchors on `[FAIL…]` and requires a `Traces:`/`Backtrace:`
+    in the block, so the bottom-of-output "Failing tests:" summary (which has no trace) is excluded.
+    Under budget pressure keeps the `[FAIL…]` header + the revert-side TAIL of the excerpt (the
+    `← [Revert]` leaves + Backtrace — where the exploit diverged), dropping the middle."""
+    lines = stdout.splitlines()
+    blocks: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        if _FAIL_LINE_RE.match(lines[i].strip()):
+            start = i
+            i += 1
+            while i < n and not _TRACE_BLOCK_END_RE.match(lines[i]):
+                i += 1
+            block = "\n".join(lines[start:i]).rstrip()
+            if "Traces:" in block or "Backtrace:" in block:
+                blocks.append(block)
+        else:
+            i += 1
+    if not blocks:
+        return ""
+    excerpt = "\n\n".join(blocks)
+    if len(excerpt) <= budget:
+        return excerpt
+    head = excerpt.split("\n", 1)[0]                      # the first [FAIL…] header line
+    tail = excerpt[-max(budget - len(head) - 5, 0):]      # revert-side tail (Backtrace / ← [Revert])
+    return f"{head}\n…\n{tail}"
+
 
 _ALLOWANCE_REVERT_RE = re.compile(r"ERC20InsufficientAllowance\((0x[0-9a-fA-F]+),\s*\d+,\s*(\d+)")
 
@@ -1622,13 +1663,22 @@ def revert_hints(stdout: str, stderr: str, task: dict) -> str:
     didn't hold), not a compile error. `_targeted_hints` cannot help here (there is
     no compiler error to resolve against signatures); the fix has to reconsider the
     EXPLOIT's own logic against the finding's own description. Quote forge's actual
-    [FAIL...] line(s) plus the finding text so the model re-derives the trigger
-    condition instead of guessing again from scratch."""
+    [FAIL...] line(s) + the failing EXECUTION TRACE (feature 029: where the attack
+    diverged) + the finding text so the model re-derives the trigger condition
+    instead of guessing again from scratch."""
     blob = stdout + "\n" + stderr
     fails = _FAIL_LINE_RE.findall(blob)
     if not fails:
         return ""
     setup = _setup_revert_hints(blob)
+    # Feature 029: the forge -vvv call trace of the failing test — the concrete path to the
+    # revert/assert — so the model sees WHERE its attack was blocked, not just THAT it failed.
+    # Empty when the run had no trace (default-verbosity run) → degrades to the prior behavior.
+    trace = _trace_excerpt(stdout)
+    trace_note = (
+        "EXECUTION TRACE of the failing test (forge -vvv — the call path to the revert/assert; "
+        "read it to see WHICH call blocked the exploit and with what value):\n" + trace
+    ) if trace else ""
     generic = (
         "The test compiled and ran, but did NOT pass — this is an EXPLOIT-LOGIC problem, "
         "not a compile error:\n" + "\n".join(dict.fromkeys(fails))[:800] +
@@ -1639,9 +1689,11 @@ def revert_hints(stdout: str, stderr: str, task: dict) -> str:
         "asserting the wrong condition, or expecting a revert that the real code doesn't "
         "produce at that call (check which call in the sequence should actually revert)."
     )
-    # An authoritative setup-revert fix (e.g. missing approve) goes FIRST — it's exact,
-    # not a re-think-the-logic nudge.
-    return f"{setup}\n\n{generic}" if setup else generic
+    # Order: an authoritative setup-revert fix (e.g. missing approve) FIRST — it's exact, not a
+    # re-think nudge; then the execution trace (concrete evidence); then the generic re-derivation.
+    # No trace → `core` is exactly `generic`, so the whole output is byte-identical to pre-029.
+    core = f"{trace_note}\n\n{generic}" if trace_note else generic
+    return f"{setup}\n\n{core}" if setup else core
 
 
 # ── Mutation-based PASS verification (feature 010) ────────────────────────────
@@ -2381,6 +2433,9 @@ def _process_finding(
                 foundry_test_dir=POC_SUBDIR,
                 timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
                 fork_rpc=fork_rpc,
+                trace=True,   # feature 029: -vvv, so a compiled-but-failed attempt's stdout carries
+                              # the failing test's call trace for revert_hints. -vvv doesn't change
+                              # the [PASS]/[FAIL]/"Compiler run failed" markers the verdict keys on.
                 **run_kwargs,
             )
         except SandboxUnavailable as e:
@@ -2468,8 +2523,10 @@ def _process_finding(
             log({"event": "targeted_hints", "finding_id": fid, "attempt": attempt,
                  "hints": hints[:300]})
         elif revert_note.strip():
+            # feature 029: record whether a forge trace was folded in, and keep enough of the note
+            # that the trace is visible in the run log (the `[:300]` slice would truncate it away).
             log({"event": "revert_hints", "finding_id": fid, "attempt": attempt,
-                 "hints": revert_note[:300]})
+                 "with_trace": "EXECUTION TRACE" in revert_note, "hints": revert_note[:1500]})
         # Stall detection: the SAME error surviving into the next attempt means the
         # previous fix didn't even try to address it — escalate rather than
         # silently repeat the same hint. Covers BOTH compile errors and runtime FAIL

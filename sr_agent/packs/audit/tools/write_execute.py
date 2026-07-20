@@ -113,6 +113,7 @@ def run_tests(
     foundry_test_dir: str | None = None,
     fork_rpc: str | None = None,
     extra_mounts: list[Mount] | None = None,
+    trace: bool = False,
 ) -> TestResult:
     """Run `forge test` inside the network-isolated sandbox.
 
@@ -147,6 +148,13 @@ def run_tests(
     # its default stays --offline + --network none.
     forking = bool(fork_rpc)
     inner = "forge test" if forking else "forge test --offline"
+    # `trace` (opt-in, drafting loop only — feature 029): `-vvv` prints the CALL TRACE for FAILING
+    # tests (a compiled-but-inert PoC's revert/assert path), and NOT for passing tests, so the
+    # feedback the next repair attempt gets shows WHERE the exploit diverged. `-vvv` not `-vvvv`:
+    # -vvvv would also dump setup + every passing test's trace (noise we would only trim away).
+    # Default off keeps mutation_verify and the scaffold smoke byte-identical.
+    if trace:
+        inner += " -vvv"
     if test_path:
         inner += f" --match-path {test_path}"
     if foundry_test_dir:
