@@ -841,6 +841,9 @@ def scaffold_missing_types(scaffold: str, target_stems: list[str],
 # the honest fallback: it would fail every draft on the scaffold's own error).
 _SYNTH_SUBDIR = "audit/poc/_synth"
 _CONTRACT_NAME_RE = re.compile(r"\b(?:abstract\s+)?contract\s+([A-Za-z_]\w*)")
+# Feature 031: max deterministic repair rounds for a synthesized base's smoke build (each round is one
+# smoke compile, so this bounds worst-case cost). ~2–3 clears the realistic mechanical error stack.
+SYNTH_REPAIR_ROUNDS = 3
 
 
 def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
@@ -879,17 +882,17 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
     # lives at audit/poc/_synth/, deeper than audit/poc/. We know the real paths: rewrite them to the
     # exact relpath from the synth file's OWN dir (deterministic; not the model's job to count `../`).
     code, _ = _fix_import_paths(code, project, base_dir=synth_dir)
-    synth_path.write_text(code, encoding="utf-8")
 
     # Compile-validate: a minimal test that INHERITS the base — if the base's imports,
-    # types, and deploy code all type-check, this builds (FR-004's bar is COMPILE).
+    # types, and deploy code all type-check, this builds (feature 011 FR-004's bar is COMPILE).
     poc_dir = project / POC_SUBDIR
     poc_dir.mkdir(parents=True, exist_ok=True)
     smoke = poc_dir / "_synth_smoke.t.sol"
     # A `./`-prefixed RELATIVE import (resolved against the importing file's dir), not a bare
     # `_synth/…` one: Solidity resolves a bare path from the project base-path (`/work`), so
     # `import "_synth/SynthBase_1.sol"` was searched at `/work/_synth/…` and 404'd even though the
-    # file sits at `/work/audit/poc/_synth/…` — the synthesis then always failed `no_build`.
+    # file sits at `/work/audit/poc/_synth/…`. The smoke imports the base by NAME, so it is stable
+    # across repair rounds (only the base FILE is rewritten).
     smoke_import = "./" + os.path.relpath(synth_path, poc_dir)
     smoke.write_text(
         "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.28;\n"
@@ -897,29 +900,47 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
         f"contract _SynthSmoke is {name} {{ function test_compiles() public {{}} }}\n",
         encoding="utf-8",
     )
+    # Feature 031: a BOUNDED DETERMINISTIC repair loop (was one-shot). On a non-compiling smoke build,
+    # apply the harness's deterministic code transforms (import depth + nested-type imports + the 9553
+    # address→interface fix) and re-compile — up to SYNTH_REPAIR_ROUNDS times — accepting the moment it
+    # compiles. NO model call (deterministic only). Early-stop when a round changes nothing (nothing left
+    # to fix). The acceptance bar is UNCHANGED — a base is trusted only if it actually compiles.
+    test = None
     try:
-        try:
-            test = run_tests(
-                project, sandbox, test_path=str(smoke.relative_to(project)),
-                foundry_test_dir=POC_SUBDIR,
-                timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
-                fork_rpc=fork_rpc, **({"image": image} if image else {}),
-            )
-        except Exception as e:  # SandboxUnavailable, timeout, … — infra, not a real fail
-            log({"event": "scaffold_synthesis_failed", "finding_id": fid, "reason": "infra",
-                 "error": str(e)[:200]})
-            synth_path.unlink(missing_ok=True)
-            return None
-        if not _compiled(test.stdout, test.stderr):
-            log({"event": "scaffold_synthesis_failed", "finding_id": fid, "reason": "no_build",
-                 "stderr_tail": (test.stdout + test.stderr)[-600:]})
-            synth_path.unlink(missing_ok=True)
-            return None
+        for rnd in range(1, SYNTH_REPAIR_ROUNDS + 1):
+            synth_path.write_text(code, encoding="utf-8")
+            try:
+                test = run_tests(
+                    project, sandbox, test_path=str(smoke.relative_to(project)),
+                    foundry_test_dir=POC_SUBDIR,
+                    timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
+                    fork_rpc=fork_rpc, **({"image": image} if image else {}),
+                )
+            except Exception as e:  # SandboxUnavailable, timeout, … — infra, not a real fail
+                log({"event": "scaffold_synthesis_failed", "finding_id": fid, "reason": "infra",
+                     "error": str(e)[:200]})
+                synth_path.unlink(missing_ok=True)
+                return None
+            if _compiled(test.stdout, test.stderr):
+                log({"event": "scaffold_synthesized", "finding_id": fid,
+                     "path": str(synth_path.relative_to(project)), "missing_types": missing_types,
+                     "repair_rounds": rnd - 1})
+                return synth_path
+            blob = test.stdout + "\n" + test.stderr
+            code, c_imp = _fix_import_paths(code, project, base_dir=synth_dir)
+            code, c_nest = _fix_nested_type_imports(code, symbol_index)
+            code, c_iface = _fix_address_interface(code, blob)
+            applied = [n for n, c in (("import_paths", c_imp), ("nested_imports", c_nest),
+                                      ("address_interface", c_iface)) if c]
+            if not applied:  # nothing left to fix deterministically → give up (no redundant recompile)
+                break
+            log({"event": "scaffold_repair", "finding_id": fid, "round": rnd, "fixes": applied})
+        log({"event": "scaffold_synthesis_failed", "finding_id": fid, "reason": "no_build",
+             "stderr_tail": ((test.stdout + test.stderr)[-600:] if test else "")})
+        synth_path.unlink(missing_ok=True)
+        return None
     finally:
         smoke.unlink(missing_ok=True)
-    log({"event": "scaffold_synthesized", "finding_id": fid,
-         "path": str(synth_path.relative_to(project)), "missing_types": missing_types})
-    return synth_path
 
 
 # ── File map: an authoritative index of every REAL contract/interface + path ──
@@ -1256,6 +1277,32 @@ def _fix_import_paths(code: str, project: Path, base_dir: Path | None = None) ->
     return "\n".join(out), changed
 
 
+# solc 9553: passing a bare `address` where a contract/interface type is required.
+# `_ADDR_IFACE_RE` (type only) drives the shared `_targeted_hints` text hint; `_ADDR_IFACE_LOC_RE`
+# (type + the flagged source LINE number) drives the deterministic `_fix_address_interface` transform —
+# keyed on the line number, not the line CONTENT, since forge truncates the shown line (`address(shar…`).
+_ADDR_IFACE_RE = re.compile(r"conversion from address to contract (\w+)")
+_ADDR_IFACE_LOC_RE = re.compile(
+    r"conversion from address to contract (\w+) requested\.\s*-->\s*\S+?:(\d+):")
+
+
+def _fix_address_interface(code: str, forge_output: str) -> tuple[str, bool]:
+    """Feature 031: deterministically repair solc 9553 — a call passing `address(x)` where a
+    contract/interface type `T` is required — by wrapping the argument as `T(address(x))` on the exact
+    flagged line (line-scoped, mirroring `_fix_import_paths`' safety: touch only the flagged line).
+    Idempotent (a line already wrapped as `T(address(…))` is left alone); `changed=False` when the
+    forge output reports no 9553. Line-number-keyed, so it is robust to forge truncating the shown
+    line. The synth repair pass uses THIS (no model); the drafting PoC gets the `_targeted_hints` hint."""
+    lines = code.splitlines()
+    changed = False
+    for typ, ln in _ADDR_IFACE_LOC_RE.findall(forge_output):
+        i = int(ln) - 1
+        if 0 <= i < len(lines) and "address(" in lines[i] and f"{typ}(address(" not in lines[i]:
+            lines[i] = re.sub(r"address\(([^()]*)\)", rf"{typ}(address(\1))", lines[i], count=1)
+            changed = True
+    return "\n".join(lines), changed
+
+
 _NAMED_IMPORT_RE = re.compile(r'import\s*\{([^}]*)\}\s*from\s*["\']([^"\']+)["\']\s*;')
 
 
@@ -1589,6 +1636,12 @@ def _targeted_hints(forge_output: str, callable_api: str, file_map: str, code: s
     # 9097 — redeclaring something the inherited test base already declares (feature 024)
     for block in _REDECLARED_RE.findall(forge_output):
         hints.append(_redeclaration_hint(block))
+    # 9553 — passing a bare `address` where a contract/interface type is required (feature 031).
+    # Shared with the drafting PoC; the deterministic synth repair uses `_fix_address_interface`.
+    for typ in _ADDR_IFACE_RE.findall(forge_output):
+        hints.append(
+            f"A call passes a bare `address` where type `{typ}` is required — wrap the argument as "
+            f"`{typ}(address(x))` (or pass the already-typed variable), don't pass a bare address.")
     return "\n".join(dict.fromkeys(hints))
 
 
