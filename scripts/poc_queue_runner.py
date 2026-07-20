@@ -76,13 +76,37 @@ class ProviderStartupError(Exception):
     """A hosted provider was misconfigured at startup (bad protocol request)."""
 
 
+def _stamp(entry: dict) -> dict:
+    """Prefix a log event with a wall-clock `ts` (epoch seconds) so per-stage durations are
+    recoverable by diffing consecutive events — the run log carried no timing before (the only
+    way to attribute a slow run was inference). Additive: consumers keying on `event` are unaffected."""
+    return {"ts": round(time.time(), 3), **entry}
+
+
+def _call_with_retry(fn, *, log, stage: str, fid: str, attempts: int | None = None):
+    """Call `fn()`, retrying on a transient model-transport failure (`MODEL_ERRORS` — a hosted
+    timeout / no-choices / rate-limit) up to `attempts` times, logging each retry so the run log
+    shows it. Re-raises the last error when exhausted. Deterministic fixers are NOT model calls and
+    never reach here; a genuine model outage still fails honestly after the retries."""
+    attempts = attempts if attempts is not None else GEN_RETRY_ATTEMPTS
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except MODEL_ERRORS as e:
+            if attempt >= attempts:
+                raise
+            log({"event": "model_retry", "finding_id": fid, "stage": stage,
+                 "attempt": attempt, "error": str(e)[:150]})
+
+
 def build_generation_client(provider: str, model: str, host: str, timeout: float) -> GenClient:
     """Build the client that drives the batch. Empty `model` → the provider default."""
     if provider == "openrouter":
-        # Thread the caller's timeout (GEN_TIMEOUT_S) through — a slow free/large hosted model
-        # (e.g. a 550B :free endpoint) can exceed the client's 120s default and time out mid-draft.
+        # Cap the PER-ATTEMPT hosted timeout (measured variance: ~46s typical, occasional >5min hang):
+        # abandon a stuck call in minutes and let `_call_with_retry` retry fresh, rather than block on
+        # one 30-min read-timeout that kills the run. Still generous vs the ~46s typical draft.
         return OpenRouterClient(api_key=os.environ.get("OPENROUTER_API_KEY", ""),
-                                model=model or OPENROUTER_MODELS[0], timeout_s=timeout)
+                                model=model or OPENROUTER_MODELS[0], timeout_s=min(timeout, HOSTED_TIMEOUT_S))
     if provider == "gemini":
         return GeminiClient(api_key=os.environ.get("GEMINI_API_KEY", ""),
                             model=model or SIMPLE_MODELS[0])
@@ -115,6 +139,11 @@ NUM_CTX = 32768                     # base + source + file-map + example; 32b on
 MAX_ATTEMPTS = 3                    # draft + up to 2 repairs
 RUN_TIMEOUT_S = 600.0              # cold `forge` compile of the whole project is slow
 GEN_TIMEOUT_S = 1800.0            # CPU-only Ollama-in-Docker is slow; a big report/PoC needs headroom
+# Hosted providers (OpenRouter/Gemini) have HIGH latency VARIANCE (measured: a draft-sized GLM call is
+# ~46s typically but occasionally hangs >5min → a read-timeout that kills the whole run). Cap the
+# per-attempt hosted timeout so a stuck call is abandoned in minutes (not 30), then retry fresh.
+HOSTED_TIMEOUT_S = 600.0
+GEN_RETRY_ATTEMPTS = 2            # a transient hosted hiccup (timeout / no-choices) → one fast retry
 EXTRACT_PREDICT = 6000             # cap output tokens so a looping small model can't run forever —
                                     # was 3000, but a real 23-task extraction runs ~2100-2500 tokens
                                     # with little headroom (root-caused 2026-07-05: a run hit the cap
@@ -2442,9 +2471,11 @@ def _process_finding(
         # agent trajectory, without needing to re-indent this whole loop
         # body under one giant enclosing span.
         with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
-            code = draft(client, task, args.project, scaffold, example, file_map, callable_api,
-                        symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode,
-                        tracer, trace, lessons=lessons)
+            code = _call_with_retry(
+                lambda: draft(client, task, args.project, scaffold, example, file_map, callable_api,
+                              symbol_index, args.lookup_budget, _log_lookup(0), protocol_mode,
+                              tracer, trace, lessons=lessons),
+                log=log, stage="draft", fid=fid)
     except MODEL_ERRORS as e:
         log({"event": "draft_failed", "finding_id": fid, "error": str(e)})
         return "draft_failed"
@@ -2611,11 +2642,13 @@ def _process_finding(
         prev_code, prev_symptom = code, (test.stdout + "\n" + test.stderr)
         try:
             with tracer.trace(f"poc-{fid}", session_id=fid) as trace:
-                code = fix(client, task, code,
-                           test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
-                           args.project, scaffold, example, file_map, callable_api,
-                           symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode,
-                           tracer, trace, lessons=lessons)
+                code = _call_with_retry(
+                    lambda: fix(client, task, code,
+                                test.stdout + "\n" + test.stderr + defect_note + hint_note + revert_note + stall_note,
+                                args.project, scaffold, example, file_map, callable_api,
+                                symbol_index, args.lookup_budget, _log_lookup(attempt), protocol_mode,
+                                tracer, trace, lessons=lessons),
+                    log=log, stage="fix", fid=fid)
         except MODEL_ERRORS as e:
             log({"event": "fix_failed", "finding_id": fid, "error": str(e)})
             outcome = "fix_failed"
@@ -2775,6 +2808,7 @@ def main() -> None:
     log_file = poc_dir / "_runner_progress.jsonl"
 
     def log(entry: dict) -> None:
+        entry = _stamp(entry)
         log_file.parent.mkdir(parents=True, exist_ok=True)
         with log_file.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
