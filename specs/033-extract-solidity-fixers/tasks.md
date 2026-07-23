@@ -17,7 +17,7 @@ NEVER transcribed. `git checkout` is safe here ONLY on committed code — within
 
 ## Phase 1: Setup — confirm the dependency inventory (pre-commit)
 
-- [ ] T001 Re-confirm the FR-011 inventory in code before touching anything: `_tracked_sol`,
+- [X] T001 Re-confirm the FR-011 inventory in code before touching anything: `_tracked_sol`,
   `_SKIP_DIRS`, `_path_for`, `POC_SUBDIR` are used by the fixers AND by grounding/index (→ `solidity_utils`);
   `_strip_comments` has NO fixer caller (→ stays in pqr, `_poc_defects` untouched); the fixers' private
   regexes (`_NAMED_IMPORT_RE`, `_UNDECLARED_BLOCK_RE`, `_ADDR_IFACE_LOC_RE`) have no non-fixer caller;
@@ -34,7 +34,7 @@ proven by a differential test whose inline side is CAPTURED from the real loop. 
 
 ### Implementation
 
-- [ ] T002 [US1] Add five named sequence-functions in `scripts/poc_queue_runner.py` (moved to the fixer
+- [X] T002 [US1] Add five named sequence-functions in `scripts/poc_queue_runner.py` (moved to the fixer
   module in Phase 5), each applying ONE site's EXACT current sequence + per-call args (FR-012):
   `_seq_synth_prewrite(code, project, synth_dir)` = `import_paths(base_dir=synth_dir)`;
   `_seq_synth_repair(code, forge_output, project, synth_dir, symbol_index)` =
@@ -46,16 +46,16 @@ proven by a differential test whose inline side is CAPTURED from the real loop. 
 
 ### Tests (the gate) — MUST be green on the PRE-extraction tree
 
-- [ ] T003 [P] [US2] Characterization tests in `tests/unit/test_solidity_fixers.py`: each named
+- [X] T003 [P] [US2] Characterization tests in `tests/unit/test_solidity_fixers.py`: each named
   sequence-function over a fixed SYNTHETIC forge-output + code fixture asserts the exact output
   (including `_seq_draft_inplace` NOT adding an import path). These are the LASTING guardrail (FR-005).
-- [ ] T004 [US1] TEMPORARY differential test (FR-014) in `tests/unit/test_fixer_extraction_diff.py`: for
+- [X] T004 [US1] TEMPORARY differential test (FR-014) in `tests/unit/test_fixer_extraction_diff.py`: for
   each site, obtain the INLINE output by RUNNING THE REAL loop through its existing stub seams and
   READING the artifact it writes (synth: a `run_tests` stub reads `synth_path` at call time — precedent
   `test_synthesize_smoke_uses_relative_import`; drafting: read `write_poc`'s file), and assert it
   byte-equals the named function on the SAME inputs. MUST NOT transcribe the sequence (would agree on a
   mis-copied `base_dir=synth_dir` vs `project`). This file is DELETED in Phase 3.
-- [ ] T005 Run `pytest -q` — GREEN on the pre-extraction tree. **COMMIT 1** (extract + tests + gate).
+- [X] T005 Run `pytest -q` — GREEN on the pre-extraction tree. **COMMIT 1** (extract + tests + gate).
 
 ---
 

@@ -1577,6 +1577,62 @@ def _path_for(file_map: str, name: str) -> str:
     return ""
 
 
+# Feature 033: the deterministic transform-APPLICATION sequences, one named function per site. Each
+# reproduces its site's EXACT current sequence (same transforms, same order, same per-call args) and
+# returns (code, applied) — the ordered fixer-names that changed the code. The loops keep their OWN
+# control flow (recompile/bounds) and emit their OWN events from `applied`, byte-identical to before.
+# This is NOT unification (each site keeps its own function + sequence — merging is spec 034); it exists
+# so the characterization tests (FR-005) can drive each sequence in isolation. Moved to solidity_fixers
+# in the final commit.
+
+def _seq_synth_prewrite(code: str, project: Path, synth_dir: Path) -> tuple[str, list[str]]:
+    """Synthesis pre-write: rewrite import paths relative to the synth file's own (deeper) dir."""
+    code, c_imp = _fix_import_paths(code, project, base_dir=synth_dir)
+    return code, (["import_paths"] if c_imp else [])
+
+
+def _seq_synth_repair(code: str, forge_output: str, project: Path, synth_dir: Path,
+                      symbol_index) -> tuple[str, list[str]]:
+    """Synthesis repair round: import depth + nested-type imports + 9553 address->interface.
+    NOTE: nested is called WITHOUT file_map here (defaults "") — a per-call divergence from
+    the post-model site's nested(file_map)."""
+    code, c_imp = _fix_import_paths(code, project, base_dir=synth_dir)
+    code, c_nest = _fix_nested_type_imports(code, symbol_index)
+    code, c_iface = _fix_address_interface(code, forge_output)
+    return code, [n for n, c in (("import_paths", c_imp), ("nested_imports", c_nest),
+                                 ("address_interface", c_iface)) if c]
+
+
+def _seq_draft_inplace(code: str, forge_output: str, symbol_index,
+                       file_map: str = "") -> tuple[str, list[str]]:
+    """Drafting in-place repair: undeclared-import of a KNOWN symbol + 9553 address->interface.
+    NOTE: does NOT run import_paths — the gap is intentional (pinned, not silently changed)."""
+    code, c_und = _fix_undeclared_import(code, forge_output, symbol_index, file_map)
+    code, c_iface = _fix_address_interface(code, forge_output)
+    return code, [n for n, c in (("undeclared_import", c_und), ("address_interface", c_iface)) if c]
+
+
+def _seq_postmodel(code: str, project: Path, symbol_index, file_map: str, scaffold: str,
+                   guard: bool) -> tuple[str, list[str]]:
+    """Drafting post-model (draft & fix): setup-override (guarded) -> import_paths(project) ->
+    nested(file_map) -> scaffold_base. The caller emits one event per applied fixer with its stage."""
+    applied: list[str] = []
+    if guard:
+        code, changed = _fix_setup_override(code)
+        if changed:
+            applied.append("setup_override")
+    code, ip_changed = _fix_import_paths(code, project)
+    if ip_changed:
+        applied.append("import_paths")
+    code, nested_changed = _fix_nested_type_imports(code, symbol_index, file_map)
+    if nested_changed:
+        applied.append("nested_imports")
+    code, base_changed = _fix_scaffold_base(code, scaffold)
+    if base_changed:
+        applied.append("scaffold_base")
+    return code, applied
+
+
 def _sig_by_method(callable_api: str, method: str) -> str:
     """Every real signature named `method`, across all [callable_api] blocks — a
     call-site error doesn't name its contract, only its file:line, so this searches
