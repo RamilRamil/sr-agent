@@ -45,4 +45,15 @@
   `project_poc_runner_monolith`); consolidating the FUNCTIONS fixes the logic-bug cause at the function
   level, and the characterization tests make the future sequence-unification safe.
 - No target material: a refactor of harness code; fixtures are invented/synthetic forge shapes.
+- **REVISED AGAIN (3rd review)**: (1) the cohesion assumption was FALSE — fixers share low-level helpers
+  (`_tracked_sol`/`_SKIP_DIRS`/`_path_for`/`_strip_comments`) with grounding/`_poc_defects`/scaffold code,
+  so a "move only the fixers" is impossible without a circular import → FR-011 introduces a shared
+  low-level utils module (a bundled, acknowledged second behavior-preserving move; touches `_poc_defects`
+  ONLY at its import line). (2) the five sequences are INLINE inside `synthesize_scaffold`/`_process_finding`
+  so they can't be tested in isolation → FR-012 extracts each into its own named sequence-function
+  (behavior-preserving, NOT unification), which FR-005 characterization tests target and FR-009 keys on
+  BY NAME (stable structural invariant, not brittle line numbers). This makes US2 actually implementable
+  and the site-inventory an enforced invariant.
+- A dependency inventory (FR-011) MUST precede tasks.md, so the module boundary is decided with evidence,
+  not blindly at implementation time (where it would most likely become a circular import).
 ```

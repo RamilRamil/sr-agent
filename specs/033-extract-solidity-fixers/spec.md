@@ -70,9 +70,10 @@ sequences are captured before any future unification can silently change them.
 unification would change. Without these, "behavior-preserving" is unverifiable and the future
 unification (034) is unsafe.
 
-**Independent test**: Each characterization test drives one site's transform sequence over a fixed forge
-output + code and asserts the resulting code; the tests are green on the current (pre-move) behavior and
-stay green after the move.
+**Independent test**: Each characterization test calls one site's named sequence-function (FR-012)
+directly over a fixed forge output + code and asserts the resulting code; the tests are green on the
+current (pre-move) behavior — the named functions are extracted first, preserving each inline sequence —
+and stay green after the fixers move.
 
 **Acceptance Scenarios**:
 
@@ -117,23 +118,45 @@ stay green after the move.
   test-first gate for sensitive behavior); SC-006's per-commit diff makes it checkable.
 - **FR-006**: The run-log events (`postfix_imports`, `scaffold_repair`, `deterministic_fix`) MUST keep
   the same names and field shapes.
-- **FR-007**: NO fixer logic, NO sequence, NO error class, NO model call may change; the compile/pass
+- **FR-007**: NO fixer LOGIC, NO sequence, NO error class, NO model call may change; the compile/pass
   verdict, exploit-logic path, `_poc_defects`, fork oracle, `mutation_verify`, and 029 trace feedback
-  MUST be untouched.
+  MUST be untouched — "untouched" means their LOGIC. The ONLY permitted mechanical touches are: import
+  lines that change because a shared helper moved to the utils module (FR-011, e.g. `_poc_defects`'s
+  `_strip_comments` import), and the loop bodies replacing an inline sequence with a call to its named
+  sequence-function (FR-012). Both are covered by the existing tests staying green.
 - **FR-008**: The refactor MUST be validated by the full existing offline suite passing UNCHANGED plus
   the new characterization tests; no forge/model/network in tests; no target material
   (`test_no_target_material.py`).
-- **FR-009 (site inventory as an enforced invariant)**: an ARCHITECTURE test (under `tests/architecture/`)
-  MUST enumerate the fixer call sites and assert the KNOWN set — so adding a SIXTH site becomes a
-  conscious, declared change (update the assertion) rather than a silent one that gets an unpinned
-  sequence and re-opens the bug class. Without this, "five sites" is a comment, not an invariant (specs
-  031 and 032 each added a site within days — a sixth is likely).
+- **FR-009 (site inventory as an enforced invariant, keyed by NAME)**: an ARCHITECTURE test (under
+  `tests/architecture/`) MUST assert the KNOWN SET of named sequence-functions (FR-012) BY NAME — and
+  that the individual fixers are called ONLY from inside those functions (no inline fixer call escapes
+  into a new unpinned site). Keying on the function-NAME set (not line numbers, which any unrelated
+  refactor would break and which would get weakened) makes it a stable STRUCTURAL assertion: adding a
+  SIXTH site means adding a named function + updating the asserted set — a conscious, declared change,
+  not a silent one that re-opens the bug class (specs 031/032 each added a site within days — a sixth is
+  likely). Without this, "five sites" is a comment, not an invariant.
 - **FR-010 (re-exports are transitional, not the goal)**: re-exports from `poc_queue_runner.py` keep the
   old call sites working, but they MUST be marked TRANSITIONAL (a deprecation note + a follow-up to
   remove them); INTERNAL callers inside the new module MUST call the module's own functions directly,
   never the pqr re-export. NOTE for future test authors: once fixers are called inside the new module,
   a `monkeypatch.setattr(pqr, "_fix_…")` on a re-exported name would patch a symbol NOBODY calls and
   PASS VACUOUSLY — future tests MUST patch the new module's symbol, not the pqr re-export.
+- **FR-011 (dependency inventory + shared-utils module — resolves the boundary BEFORE tasks)**: before
+  tasks.md, a dependency inventory of the fixers MUST be produced, and the shared low-level helpers the
+  fixers pull in that are ALSO used by grounding/gate/scaffold code (`_tracked_sol`, `_SKIP_DIRS`,
+  `_path_for`, `_strip_comments`, and any the inventory surfaces) MUST move into a SHARED low-level utils
+  module that BOTH `poc_queue_runner.py` and the new fixer module import — avoiding the circular import.
+  This is a SECOND, also-honest, behavior-preserving move bundled here (acknowledged as such, not
+  smuggled). It touches `_poc_defects` ONLY at its import line (`_strip_comments` now comes from utils) —
+  its LOGIC is unchanged; FR-007's "untouchable" means LOGIC, and this mechanical import update is the
+  ONE permitted touch, covered by the existing `_poc_defects` tests staying green.
+- **FR-012 (extract each site into a named sequence-function — required for FR-005 to be implementable)**:
+  the five transform-application sequences are currently INLINE inside `synthesize_scaffold` and
+  `_process_finding`, so a characterization test cannot drive "the sequence" in isolation. Each site MUST
+  be extracted into its OWN named function (in the fixer module) that applies that site's EXACT current
+  sequence (same transforms, same order, same per-call args); the loops call these named functions. This
+  is behavior-preserving and is NOT unification — each site keeps its OWN separate function and sequence
+  (merging them is 034). The characterization tests (FR-005) target these named functions directly.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -166,8 +189,14 @@ stay green after the move.
 
 ## Assumptions
 
-- The transforms are cohesive pure functions that can move together; they depend only on `_path_for`/
-  the index/file-map, which move with them or are passed in.
+- **CORRECTED (a review found the naive cohesion claim FALSE)**: the fixers are NOT self-contained —
+  they share low-level helpers with code FR-007 declares untouchable: `_tracked_sol` and `_SKIP_DIRS`
+  are used by the fixers AND by grounding (`_resolve_local_imports`) and symbol-index/file-map building;
+  `_path_for` by two fixers; `_strip_comments` by `_poc_defects` and scaffold-state-var analysis. So a
+  clean "move only the fixers" is impossible: moving these helpers would drag grounding/gate call sites
+  (not a fixer move); leaving them in pqr and importing from the new module creates a CIRCULAR import
+  (pqr re-exports fixers from the new module, the new module imports helpers from pqr). The boundary is
+  resolved by FR-011 (a shared low-level utils module) — see below.
 - Re-exporting moved symbols from `poc_queue_runner.py` keeps the diff a pure move AND the old call
   sites working — but it is TRANSITIONAL (FR-010): the coupling win comes from removing them later, not
   from the re-export itself.
