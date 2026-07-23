@@ -873,6 +873,9 @@ _CONTRACT_NAME_RE = re.compile(r"\b(?:abstract\s+)?contract\s+([A-Za-z_]\w*)")
 # Feature 031: max deterministic repair rounds for a synthesized base's smoke build (each round is one
 # smoke compile, so this bounds worst-case cost). ~2–3 clears the realistic mechanical error stack.
 SYNTH_REPAIR_ROUNDS = 3
+# Feature 032: max IN-PLACE deterministic compile-repair rounds per drafting attempt (auto-import +
+# 9553). Bounded + idempotent so it can't loop; recompiles in-place WITHOUT consuming a model attempt.
+DET_REPAIR_ROUNDS = 2
 
 
 def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
@@ -1333,6 +1336,52 @@ def _fix_address_interface(code: str, forge_output: str) -> tuple[str, bool]:
 
 
 _NAMED_IMPORT_RE = re.compile(r'import\s*\{([^}]*)\}\s*from\s*["\']([^"\']+)["\']\s*;')
+
+# solc 7576/7920 (undeclared identifier / identifier not found). Neither puts the NAME in the message —
+# it is under the `^^^` caret in the source snippet. Capture the source line + the caret line (they
+# share the same `|` gutter column), then slice the name from the source at the caret's column span.
+_UNDECLARED_BLOCK_RE = re.compile(
+    r"Error \((?:7576|7920)\):[^\n]*\n[^\n]*\n[^\n]*\n\s*\d+\s*\|(?P<src>[^\n]*)\n\s*\|(?P<caret>[^\n]*\^+[^\n]*)")
+
+
+def _fix_undeclared_import(code: str, forge_output: str, symbol_index, file_map: str = "") -> tuple[str, bool]:
+    """Feature 032: deterministically repair solc 7576/7920 (undeclared identifier) by AUTO-IMPORTING
+    the flagged name — ONLY when it is a KNOWN top-level project symbol (`_path_for(file_map, X)`
+    resolves it to a real path). A name the file-map does NOT resolve (a typo / invented API) is LEFT
+    for the model (anti-invention — the project's no-invented-API discipline). Idempotent (a name
+    already imported is not re-added); `changed=False` when nothing resolvable is undeclared or no
+    file-map is available. The name is read from under the error's `^^^` caret (the message omits it)."""
+    names: list[str] = []
+    for m in _UNDECLARED_BLOCK_RE.finditer(forge_output):
+        src, caret = m.group("src"), m.group("caret")
+        cs, ce = caret.find("^"), caret.rfind("^") + 1
+        name = src[cs:ce].strip() if 0 <= cs < ce <= len(src) else ""
+        if re.fullmatch(r"[A-Za-z_]\w*", name):
+            names.append(name)
+    if not names:
+        return code, False
+    imported = set()
+    for mm in _NAMED_IMPORT_RE.finditer(code):
+        imported.update(n.strip() for n in mm.group(1).split(","))
+    additions: list[str] = []
+    for name in dict.fromkeys(names):
+        if name in imported:
+            continue                                   # idempotent
+        path = _path_for(file_map, name)
+        if not path:
+            continue                                   # anti-invention: not a known top-level symbol
+        additions.append(f'import {{ {name} }} from "{path}";')
+        imported.add(name)
+    if not additions:
+        return code, False
+    lines = code.splitlines()
+    insert_at = 0
+    for i, ln in enumerate(lines):                     # after the pragma / last existing import
+        s = ln.strip()
+        if s.startswith("pragma") or s.startswith("import"):
+            insert_at = i + 1
+    lines[insert_at:insert_at] = additions
+    return "\n".join(lines), True
 
 
 def _fix_nested_type_imports(code: str, symbol_index, file_map: str = "") -> tuple[str, bool]:
@@ -2530,6 +2579,35 @@ def _process_finding(
             log({"event": "run_error", "finding_id": fid, "attempt": attempt, "error": str(e)})
             outcome = "run_error"
             break
+
+        # Feature 032: bounded IN-PLACE deterministic compile-repair — the harness fixes the mechanical
+        # error classes (undeclared-import of a KNOWN symbol, 9553 address→interface) ITSELF, keyed on
+        # the FAILING compile's own output (line numbers valid), instead of relying on a non-converging
+        # model. It recompiles IN-PLACE and does NOT advance `attempt` (does not consume the --attempts
+        # budget), so a mechanical fix never starves the model's exploit-logic attempts. Bounded rounds
+        # + idempotency ⇒ cannot loop; only fires on a COMPILE error (a compiled-but-inert attempt is a
+        # no-op here — that path is the 029 trace feedback).
+        for _det in range(DET_REPAIR_ROUNDS):
+            if _compiled(test.stdout, test.stderr):
+                break
+            blob = test.stdout + "\n" + test.stderr
+            code, c_und = _fix_undeclared_import(code, blob, symbol_index, file_map)
+            code, c_iface = _fix_address_interface(code, blob)
+            applied = [n for n, c in (("undeclared_import", c_und), ("address_interface", c_iface)) if c]
+            if not applied:
+                break
+            log({"event": "deterministic_fix", "finding_id": fid, "attempt": attempt, "fixes": applied})
+            res = write_poc(fid, poc_dir, generator=lambda _f, c=code: c)
+            try:
+                test = run_tests(
+                    args.project, sandbox, test_path=str(res.path.relative_to(args.project)),
+                    foundry_test_dir=POC_SUBDIR,
+                    timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
+                    fork_rpc=fork_rpc, trace=True, **run_kwargs,
+                )
+            except Exception as e:  # infra during the in-place recompile — keep the model-fix path
+                log({"event": "run_error", "finding_id": fid, "attempt": attempt, "error": str(e)})
+                break
 
         # A result only counts if the PoC is structurally real (not vacuous/mocked).
         defects = _poc_defects(code, target_stems, scaffold_used=bool(scaffold))

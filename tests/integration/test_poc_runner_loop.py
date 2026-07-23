@@ -133,6 +133,25 @@ def test_loop_revert_hints_carries_trace(tmp_path, monkeypatch):
     assert "EXECUTION TRACE" in rh[0]["hints"] and "DemoVault::gate()" in rh[0]["hints"]
 
 
+def test_loop_deterministic_9553_fix_no_model_no_attempt(tmp_path, monkeypatch):
+    """Feature 032: an attempt that fails to compile with a 9553 is repaired IN-PLACE by the harness
+    (address_interface transform), recompiled, and accepted — WITHOUT calling the model `fix()` and
+    WITHOUT consuming a model attempt (SC-008). Invented names — no target material."""
+    draft = "contract PoC is Base { function t() public { reg.cfg(address(thing)); assertEq(a, 1); } }"
+    fail_9553 = _ForgeResult(passed=False, exit_code=1, stdout=(
+        "Compiler run failed:\nError (9553): Invalid implicit conversion from address to contract "
+        "IThing requested.\n  --> audit/poc/1.t.sol:1:46:\n"), stderr="")
+    ok = _ForgeResult(passed=True, exit_code=0, stdout="Ran 1 test\n[PASS] t()", stderr="")
+    # fixes=[] → the model fix() must NOT be called (it would IndexError on the empty queue)
+    outcome, events = _run(TASK, tmp_path, drafts=[draft], fixes=[],
+                           results=[fail_9553, ok], attempts=3, monkeypatch=monkeypatch)
+    det = [e for e in events if e["event"] == "deterministic_fix"]
+    assert det and det[0]["fixes"] == ["address_interface"]          # harness fixed 9553 itself
+    tested = [e for e in events if e["event"] == "tested"]
+    assert len(tested) == 1 and tested[0]["compiled"] is True        # one attempt, now compiles
+    assert not any(e["event"] == "written" and e["attempt"] == 2 for e in events)  # no attempt consumed
+
+
 def test_loop_stall_exhausts(tmp_path, monkeypatch):
     """Every attempt returns the identical compile error → a stall is detected and
     the finding ends 'exhausted'."""

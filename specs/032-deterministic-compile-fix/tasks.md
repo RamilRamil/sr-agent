@@ -20,7 +20,7 @@ US1+US2+US3 are the MVP.
 
 ## Phase 1: Setup
 
-- [ ] T001 Verify the seams before editing `scripts/poc_queue_runner.py`: confirm (a) the drafting loop's
+- [X] T001 Verify the seams before editing `scripts/poc_queue_runner.py`: confirm (a) the drafting loop's
   error-agnostic post-fix pass is `_fix_import_paths(code, args.project)` + `_fix_nested_type_imports`
   at ~L2491 (draft) and ~L2665 (fix), (b) the compile-FALSE repair branch (where the model `fix()` is
   called ~L2644) is where the new deterministic step goes BEFORE `fix()`, (c) `_path_for(file_map,
@@ -40,23 +40,23 @@ unknown; is idempotent; is a no-op with an empty file_map.
 
 ### Tests for US1 + US2
 
-- [ ] T002 [P] [US1] Test in `tests/unit/test_poc_queue_runner.py`: `_fix_undeclared_import` over code
+- [X] T002 [P] [US1] Test in `tests/unit/test_poc_queue_runner.py`: `_fix_undeclared_import` over code
   using `Foo` (unimported) + a stubbed `file_map` mapping `Foo` to a real path + forge output
   "Undeclared identifier `Foo`" adds `import { Foo } from "<path>";` and returns `changed=True` (FR-001).
-- [ ] T003 [P] [US1] Test: the same with the 7920 wording "Identifier not found `Foo`" also triggers
+- [X] T003 [P] [US1] Test: the same with the 7920 wording "Identifier not found `Foo`" also triggers
   the import (both wordings handled — FR-001).
-- [ ] T004 [P] [US2] Test: forge "Undeclared identifier `Bar`" where the file_map does NOT resolve
+- [X] T004 [P] [US2] Test: forge "Undeclared identifier `Bar`" where the file_map does NOT resolve
   `Bar` → code unchanged, `changed=False` (anti-invention — FR-003).
-- [ ] T005 [P] [US1] Test: a mix — `Foo` (known) and `Bar` (unknown) both undeclared → only `Foo` is
+- [X] T005 [P] [US1] Test: a mix — `Foo` (known) and `Bar` (unknown) both undeclared → only `Foo` is
   imported; `Bar` is left (FR-001/FR-003).
-- [ ] T006 [P] [US1] Test: idempotent — running `_fix_undeclared_import` again on the now-imported `Foo`
+- [X] T006 [P] [US1] Test: idempotent — running `_fix_undeclared_import` again on the now-imported `Foo`
   adds no duplicate (`changed=False`) (FR-002).
-- [ ] T007 [P] [US1] Test: empty `file_map` (no index) → `_path_for` returns "" → no-op, `changed=False`
+- [X] T007 [P] [US1] Test: empty `file_map` (no index) → `_path_for` returns "" → no-op, `changed=False`
   (FR-007).
 
 ### Implementation for US1 + US2
 
-- [ ] T008 [US1] Add `_fix_undeclared_import(code, forge_output, symbol_index, file_map) -> (code,
+- [X] T008 [US1] Add `_fix_undeclared_import(code, forge_output, symbol_index, file_map) -> (code,
   changed)` to `scripts/poc_queue_runner.py`: regex the 7576/7920 "Undeclared identifier `X`" /
   "Identifier not found `X`" names from `forge_output`; for each `X` where `_path_for(file_map, X)`
   resolves to a non-empty path AND `X` is not already imported in `code`, prepend `import { X } from
@@ -74,7 +74,7 @@ output has a 9553, applies `_fix_address_interface` and skips the model fix.
 
 ### Tests for US3
 
-- [ ] T009 [P] [US3] Test in `tests/integration/test_poc_runner_loop.py`: drive the loop (model/forge
+- [X] T009 [P] [US3] Test in `tests/integration/test_poc_runner_loop.py`: drive the loop (model/forge
   seams stubbed: `run_tests` returns compile-FALSE-with-9553 THEN compiled) so an attempt compiles-FALSE
   with a synthetic 9553 on a `setter(address(x))` line; assert the code is deterministically fixed to
   `Type(address(x))`, a `deterministic_fix` event fired, the model `fix()` was NOT called, AND the
@@ -84,7 +84,7 @@ output has a 9553, applies `_fix_address_interface` and skips the model fix.
 
 ### Implementation for US3
 
-- [ ] T010 [US1+US3] Add `DET_REPAIR_ROUNDS` (~2) and a BOUNDED IN-PLACE deterministic-repair sub-step
+- [X] T010 [US1+US3] Add `DET_REPAIR_ROUNDS` (~2) and a BOUNDED IN-PLACE deterministic-repair sub-step
   in the drafting loop (`scripts/poc_queue_runner.py`, on the compile-FALSE branch, BEFORE the
   `_call_with_retry(... fix ...)` call ~L2644): a `while` up to `DET_REPAIR_ROUNDS` — `blob =
   test.stdout + test.stderr`; `code, c_und = _fix_undeclared_import(code, blob, symbol_index,
@@ -109,13 +109,13 @@ output has a 9553, applies `_fix_address_interface` and skips the model fix.
 
 ### Tests for US4
 
-- [ ] T011 [P] [US4] Test (folded into T009 or separate in `test_poc_runner_loop.py`): the emitted
+- [X] T011 [P] [US4] Test (folded into T009 or separate in `test_poc_runner_loop.py`): the emitted
   `deterministic_fix` event carries `fixes` naming the applied transform(s) (e.g. `undeclared_import` /
   `address_interface`) and the attempt (FR-009).
 
 ### Implementation for US4
 
-- [ ] T012 [US4] Ensure the `deterministic_fix` event (emitted in T010) includes `{finding_id, attempt,
+- [X] T012 [US4] Ensure the `deterministic_fix` event (emitted in T010) includes `{finding_id, attempt,
   fixes: [names]}`; the existing `postfix_imports` / `targeted_hints` events are unchanged (FR-009).
 
 **Checkpoint**: US4 testable — T011 passes; a run log records the harness-side repair.
@@ -124,18 +124,18 @@ output has a 9553, applies `_fix_address_interface` and skips the model fix.
 
 ## Phase 5: Polish & cross-cutting
 
-- [ ] T013 Run `pytest tests/unit/test_poc_queue_runner.py tests/integration/test_poc_runner_loop.py -q`
+- [X] T013 Run `pytest tests/unit/test_poc_queue_runner.py tests/integration/test_poc_runner_loop.py -q`
   — all pass offline; no forge/model/container/network (SC-006).
-- [ ] T014 Run the full suite `pytest -q` and confirm zero regressions — especially the existing
+- [X] T014 Run the full suite `pytest -q` and confirm zero regressions — especially the existing
   `_fix_import_paths` / `_fix_nested_type_imports` / `_fix_address_interface` / `_targeted_hints` /
   drafting-loop tests, since the loop's repair branch changed (FR-006/FR-008, SC-007).
-- [ ] T015 [P] Verify the guards fail by mutation (on COMMITTED code — reverse Edit, NEVER `git checkout`
+- [X] T015 [P] Verify the guards fail by mutation (on COMMITTED code — reverse Edit, NEVER `git checkout`
   uncommitted work): make `_fix_undeclared_import` ignore the `_path_for` gate (import any undeclared
   name) → T004 (anti-invention) FAILS; make it a no-op → T002 FAILS; drop the `_fix_address_interface`
   call from the loop step → T009 FAILS. Revert all three (SC-001/SC-002/SC-004).
-- [ ] T016 [P] Confirm no target material entered the repo: every fixture (names, forge errors, file_map)
+- [X] T016 [P] Confirm no target material entered the repo: every fixture (names, forge errors, file_map)
   is invented; `pytest tests/architecture/test_no_target_material.py -q` passes (FR-010).
-- [ ] T017 [P] Add a landing entry to `docs/roadmap.md` for spec 032: measured compile-error frequency
+- [X] T017 [P] Add a landing entry to `docs/roadmap.md` for spec 032: measured compile-error frequency
   (undeclared ×8, 9553 ×3 in-scope; wrong-arg/invalid-token/instantiate-interface out) showed the
   compile-fix loop does not converge because it relies on the model; fix = the harness deterministically
   auto-imports a KNOWN undeclared symbol (anti-invention gated on `_path_for`) and wires 031's 9553
