@@ -15,13 +15,23 @@ The original framing coupled two things that CANNOT both hold: "remove the dupli
 repair loops" AND "zero functional change". The transforms are applied at **five** sites with
 **divergent** sequences:
 
-| Site | Sequence |
+| Site | Sequence (CORRECTED from code during T001 — see note) |
 |------|----------|
-| synthesis pre-write | `import_paths(base_dir=synth_dir)` |
-| synthesis repair loop | `import_paths(base_dir=synth_dir) → nested → address_interface` |
-| drafting post-model (draft) | `setup_override → import_paths(project) → nested` |
+| synthesis pre-write | `import_paths(base_dir=synth_dir)` (discards `changed`) |
+| synthesis repair loop | `import_paths(base_dir=synth_dir) → nested(symbol_index, NO file_map) → address_interface` |
+| drafting post-model (draft) | `setup_override(if guard) → import_paths(project) → nested(file_map) → scaffold_base` |
 | drafting in-place repair | `undeclared_import → address_interface` |
-| drafting post-model (fix) | `setup_override → import_paths(project) → nested` |
+| drafting post-model (fix) | `setup_override(if guard) → import_paths(project) → nested(file_map) → scaffold_base` (stage=`fix{attempt}`) |
+
+> **T001 CORRECTION (2026-07-23, from the code, ground truth for a byte-identical move)**: the original
+> table (and FR-001's fixer list) undercounted. There are **SIX** deterministic fixers, not five —
+> `_fix_scaffold_base` is a sixth, part of both post-model sequences (its own test exists). It depends on
+> `_scaffold_base_name`, which grounding also uses → a SIXTH shared helper for `solidity_utils`. The
+> post-model sites apply FOUR fixers, each emitting its OWN event (`postfix_setup`/`postfix_imports`/
+> `postfix_nested_import`/`postfix_scaffold_base`, `setup_override` guarded by `guard`) — not one `applied`
+> list. Synth-repair's `nested` is called WITHOUT `file_map` (defaults `""`) — a per-call-arg divergence
+> from the post-model `nested(file_map)`, exactly the class FR-014 gates. Everywhere "five" appears below,
+> read "six fixers / five sites"; the extraction reproduces these EXACT sequences.
 
 The divergence IS where the bug class lives (the in-place drafting step never runs `import_paths`;
 `import_paths` runs with a different base in synthesis). A single shared helper would either
@@ -99,8 +109,8 @@ and stay green after the fixers move.
 ### Functional Requirements
 
 - **FR-001**: The deterministic transform functions (import-path/SPDX, nested-type imports,
-  address→interface, auto-import undeclared, setup-override) and the regexes/constants they own MUST
-  move, logic-unchanged, into a new dedicated module.
+  address→interface, auto-import undeclared, setup-override, AND scaffold-base — SIX total, T001
+  correction) and the regexes/constants they own MUST move, logic-unchanged, into a new dedicated module.
 - **FR-002**: Every existing call site — harness AND tests — MUST keep working via import or re-export
   from `poc_queue_runner.py`; no test LOGIC may change.
 - **FR-003**: Each fixer's output MUST be byte-identical to before for the same inputs (pure move).

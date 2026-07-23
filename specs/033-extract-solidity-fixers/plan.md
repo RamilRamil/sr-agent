@@ -25,8 +25,10 @@ Verified in code (line refs at plan time):
 | `_path_for` (1572) | `_fix_undeclared_import`, `_fix_nested_type_imports` | 1457, 1723 | **utils** (shared) |
 | `POC_SUBDIR` | `_fix_import_paths` | many | **utils** (shared const) |
 | `_strip_comments` (1501) | **none** | `_poc_defects` 603, grounding 772, scaffold 1639 | **STAYS in pqr** — refinement: no fixer uses it, so `_poc_defects` is NOT touched at all (tighter than FR-007 required) |
-| `_NAMED_IMPORT_RE`, `_UNDECLARED_BLOCK_RE`, `_ADDR_IFACE_LOC_RE` | the fixers | (confirm none) | **fixers** (private) |
-| `_ADDR_IFACE_RE` | `_targeted_hints` (a HINT builder, stays in pqr) | — | **utils** or stays in pqr (import into fixers if needed) — the fixer uses `_ADDR_IFACE_LOC_RE`, not this one |
+| `_scaffold_base_name` (765) | `_fix_scaffold_base` (1482) | grounding 796 | **utils** (shared) — T001 correction: sixth shared helper |
+| `_NAMED_IMPORT_RE`, `_UNDECLARED_BLOCK_RE`, `_ADDR_IFACE_LOC_RE` | the fixers | (confirmed none) | **fixers** (private) |
+| `_ADDR_IFACE_RE` (1335) | **not the fixer** — `_targeted_hints` (1738) | — | **STAYS in pqr** (hint builder); the fixer uses `_ADDR_IFACE_LOC_RE`, which moves |
+| `_fix_scaffold_base` (1475) | itself | drafting post-model 2565/2768 | **fixers** — T001 correction: a SIXTH fixer the original list missed |
 
 **Module boundary**: `solidity_utils` = `_tracked_sol`, `_SKIP_DIRS`, `_path_for`, `POC_SUBDIR` (+ any
 shared regex the inventory confirms). `solidity_fixers` = the five `_fix_*` + their private regexes +
