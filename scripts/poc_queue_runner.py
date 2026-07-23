@@ -53,6 +53,10 @@ from sr_agent.eval.tracer import NOOP_TRACER, Tracer
 
 from scripts.patch_reconstruct import ReconstructionRefused, reconstruct
 from scripts.solidity_index import SymbolIndex, expand_referenced_types
+from scripts.solidity_utils import (  # feature 033: shared low-level helpers (see solidity_utils.py)
+    POC_SUBDIR, _SCAFFOLD_CONTRACT_RE, _SCAFFOLD_IS_RE, _SKIP_DIRS, _path_for,
+    _scaffold_base_name, _strip_comments, _tracked_sol,
+)
 
 # Any model-transport failure — local (Ollama) OR hosted (Gemini/OpenRouter). The
 # harness catches these at every model-call site so a hosted 404/503/quota surfaces
@@ -63,7 +67,7 @@ MODEL_ERRORS = (ModelUnavailableError, GeminiUnavailable, OpenRouterUnavailable)
 # The target project + audit report are ALWAYS supplied by the operator at the
 # CLI (or via POC_PROJECT / POC_REPORT env) and live entirely OUTSIDE this repo.
 # No audited/bug-bounty target is ever hardcoded here — this harness is generic.
-POC_SUBDIR = "audit/poc"            # PoCs live here; needs FOUNDRY_TEST override
+# POC_SUBDIR: imported from scripts.solidity_utils (feature 033)
 MODEL = "qwen2.5-coder:7b"          # 7b is far more reliable at code than 3b
 
 # The batch can be driven by the local Ollama model (default) or, opt-in, a capable
@@ -609,7 +613,7 @@ SOURCE_CHAR_BUDGET = 26000  # target + transitive dep interfaces; within num_ctx
 PRIMARY_CHAR_CAP = 10000    # cap each target file so its dep interfaces are never starved
 IMPORT_DEPTH = 2            # follow local imports 2 levels: base contracts (access-control,
                             # cooldown base, …) reach the model, not just direct interfaces
-_SKIP_DIRS = {"out", "cache_forge", "node_modules", "lib", "artifacts"}
+# _SKIP_DIRS: imported from scripts.solidity_utils (feature 033)
 
 
 def _resolve_local_imports(source_path: Path, text: str) -> list[Path]:
@@ -702,16 +706,7 @@ def _foundry_test_dir(project: Path) -> str:
     return "test"
 
 
-def _tracked_sol(project: Path) -> set[Path]:
-    """Git-tracked .sol files — the ORIGINAL project. Excludes anything we (or a
-    prior skill run) generated but never committed, so grounding/scaffold only ever
-    uses the contest's own code, never our own PoCs (honesty of the workability test)."""
-    try:
-        out = subprocess.run(["git", "-C", str(project), "ls-files", "*.sol"],
-                             capture_output=True, text=True, timeout=15)
-        return {(project / line).resolve() for line in out.stdout.splitlines() if line.strip()}
-    except Exception:
-        return set()
+# _tracked_sol: imported from scripts.solidity_utils (feature 033)
 
 
 def resolve_scaffold(project: Path, spec: str, disabled: bool,
@@ -754,30 +749,8 @@ def resolve_scaffold(project: Path, spec: str, disabled: bool,
     return []
 
 
-# A real contract DECLARATION only — `contract Name is …` or `contract Name {` — never the
-# bare word "contract" inside a comment/string (a 2026-07-14 bug: an assert message
-# "...contract should be configured..." matched `contract should` and the guard forced
-# `is should`). Comments are stripped first; the name must be followed by `is` or `{`.
-_SCAFFOLD_CONTRACT_RE = re.compile(r"\b(?:abstract\s+)?contract\s+(\w+)\s*(?:is\b|\{)")
-_SCAFFOLD_IS_RE = re.compile(r"\bcontract\s+\w+\s+is\s+([^{]+?)\s*\{")
-
-
-def _scaffold_base_name(text: str) -> str | None:
-    """The concrete LEAF contract to inherit from a test_scaffold file — the contract
-    DECLARED in it that is not itself a base of another in-file contract (e.g. `DemoTest`,
-    NOT the imported `DemoDeploy` it extends). Live H-01 run (2026-07-14): given the raw
-    scaffold file, the model inherited the grandparent base and lost setUp + all the deployed
-    state (`sharesCooldown`, the exit constants) → a cascade of `Undeclared identifier`. The
-    leaf is what actually has setUp + the state; Solidity convention puts bases first, leaf last."""
-    text = _strip_comments(text or "")
-    decls = _SCAFFOLD_CONTRACT_RE.findall(text)
-    if not decls:
-        return None
-    used_as_base: set[str] = set()
-    for bases in _SCAFFOLD_IS_RE.findall(text):
-        used_as_base.update(b.strip() for b in bases.split(","))
-    leaves = [n for n in decls if n not in used_as_base]
-    return leaves[-1] if leaves else decls[-1]
+# _SCAFFOLD_CONTRACT_RE, _SCAFFOLD_IS_RE, _scaffold_base_name: imported from
+# scripts.solidity_utils (feature 033) — shared by _fix_scaffold_base and read_scaffold.
 
 
 def read_scaffold(project: Path, paths: list[Path]) -> str:
@@ -1494,9 +1467,7 @@ _ASSERT_RE = re.compile(
 )
 
 
-def _strip_comments(sol: str) -> str:
-    sol = re.sub(r"/\*.*?\*/", "", sol, flags=re.DOTALL)
-    return re.sub(r"//[^\n]*", "", sol)
+# _strip_comments: imported from scripts.solidity_utils (feature 033)
 
 
 def _poc_defects(code: str, target_stems: list[str], scaffold_used: bool = False) -> list[str]:
@@ -1565,12 +1536,7 @@ def _sigs_for(callable_api: str, contract: str) -> str:
     return ""
 
 
-def _path_for(file_map: str, name: str) -> str:
-    """The real import path for a contract/interface name, from [project_files]."""
-    for line in file_map.splitlines():
-        if line.startswith(f"{name}: "):
-            return line.split(": ", 1)[1]
-    return ""
+# _path_for: imported from scripts.solidity_utils (feature 033)
 
 
 # Feature 033: the deterministic transform-APPLICATION sequences, one named function per site. Each

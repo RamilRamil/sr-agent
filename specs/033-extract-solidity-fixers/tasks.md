@@ -86,11 +86,11 @@ proven by a differential test whose inline side is CAPTURED from the real loop. 
 
 ### Implementation
 
-- [ ] T009 [US1] Create `scripts/solidity_utils.py` and MOVE `_tracked_sol`, `_SKIP_DIRS`, `_path_for`,
+- [X] T009 [US1] Create `scripts/solidity_utils.py` and MOVE `_tracked_sol`, `_SKIP_DIRS`, `_path_for`,
   `POC_SUBDIR` (+ any shared regex the inventory confirmed) into it, logic-unchanged. Update EVERY
   importer in `poc_queue_runner.py` (grounding/index/fixer call sites) to import from `solidity_utils`.
   `_strip_comments` STAYS in pqr → `_poc_defects` is NOT touched (FR-011 refinement).
-- [ ] T010 Run `pytest -q` — GREEN (grounding/index/`_poc_defects`/characterization unchanged).
+- [X] T010 Run `pytest -q` — GREEN (grounding/index/`_poc_defects`/characterization unchanged).
   **COMMIT 3** (move shared helpers).
 
 ---
