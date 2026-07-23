@@ -30,6 +30,7 @@ from pathlib import Path
 CALL_RELATIONS = {"calls"}
 IMPORT_RELATIONS = {"imports", "imports_from"}
 CHILD_RELATIONS = {"contains", "method"}
+GRAPHIFY_TIMEOUT_S = 600  # cap `graphify extract` so a stuck run can't hang the caller forever
 
 
 class CodeGraphFormatError(Exception):
@@ -250,11 +251,18 @@ def build_graph(root: str | Path) -> Path:
     # Without it, a repo containing docs (.md/.txt) makes graphify demand an LLM key
     # for semantic extraction of those files — which would break the offline guarantee.
     # --no-viz: skip the HTML render, keep graph.json + report.
-    proc = subprocess.run(  # noqa: S603 - fixed argv, no shell, our own trusted repo
-        ["graphify", "extract", str(root), "--code-only", "--no-viz"],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell, our own trusted repo
+            ["graphify", "extract", str(root), "--code-only", "--no-viz"],
+            capture_output=True,
+            text=True,
+            timeout=GRAPHIFY_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        # A stuck extraction must not hang the caller indefinitely (no timeout before).
+        raise CodeGraphFormatError(
+            f"graphify extract timed out after {GRAPHIFY_TIMEOUT_S}s on {root}"
+        ) from e
     if proc.returncode != 0:
         raise CodeGraphFormatError(
             f"graphify extract failed ({proc.returncode}): {proc.stderr.strip()[-500:]}"
