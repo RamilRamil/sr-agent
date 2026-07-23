@@ -92,6 +92,14 @@ def _fix_import_paths(code: str, project: Path, base_dir: Path | None = None) ->
                     if tracked:
                         cands = [p for p in cands if p.resolve() in tracked] or cands
                     if cands:
+                        # Deterministic pick (feature 033 F2): `rglob` yields os.scandir order,
+                        # unsorted and not stable across machines/filesystems. With two same-named
+                        # files (e.g. a real `src/IFoo.sol` beside a `test/mocks/IFoo.sol`), `cands[0]`
+                        # would resolve the rewrite arbitrarily — silently importing a different-but-
+                        # valid type (the mock), a PoC that compiles against the wrong contract. Prefer
+                        # the SHALLOWEST path (a real src contract beats a deeper mock), lexicographic
+                        # tie-break — stable AND meaningful.
+                        cands.sort(key=lambda p: (len(p.relative_to(project).parts), str(p)))
                         correct = os.path.relpath(cands[0], poc_dir)
                         if correct != path:
                             line = line.replace(path, correct)
@@ -135,13 +143,14 @@ _UNDECLARED_BLOCK_RE = re.compile(
     r"Error \((?:7576|7920)\):[^\n]*\n[^\n]*\n[^\n]*\n\s*\d+\s*\|(?P<src>[^\n]*)\n\s*\|(?P<caret>[^\n]*\^+[^\n]*)")
 
 
-def _fix_undeclared_import(code: str, forge_output: str, symbol_index, file_map: str = "") -> tuple[str, bool]:
+def _fix_undeclared_import(code: str, forge_output: str, file_map: str = "") -> tuple[str, bool]:
     """Feature 032: deterministically repair solc 7576/7920 (undeclared identifier) by AUTO-IMPORTING
     the flagged name — ONLY when it is a KNOWN top-level project symbol (`_path_for(file_map, X)`
     resolves it to a real path). A name the file-map does NOT resolve (a typo / invented API) is LEFT
     for the model (anti-invention — the project's no-invented-API discipline). Idempotent (a name
     already imported is not re-added); `changed=False` when nothing resolvable is undeclared or no
-    file-map is available. The name is read from under the error's `^^^` caret (the message omits it)."""
+    file-map is available. The name is read from under the error's `^^^` caret (the message omits it).
+    (Feature 033 F3: the anti-invention gate is file_map-driven; no symbol_index is consulted.)"""
     names: list[str] = []
     for m in _UNDECLARED_BLOCK_RE.finditer(forge_output):
         src, caret = m.group("src"), m.group("caret")
@@ -289,11 +298,10 @@ def _seq_synth_repair(code: str, forge_output: str, project: Path, synth_dir: Pa
                                  ("address_interface", c_iface)) if c]
 
 
-def _seq_draft_inplace(code: str, forge_output: str, symbol_index,
-                       file_map: str = "") -> tuple[str, list[str]]:
+def _seq_draft_inplace(code: str, forge_output: str, file_map: str = "") -> tuple[str, list[str]]:
     """Drafting in-place repair: undeclared-import of a KNOWN symbol + 9553 address->interface.
     NOTE: does NOT run import_paths — the gap is intentional (pinned, not silently changed)."""
-    code, c_und = _fix_undeclared_import(code, forge_output, symbol_index, file_map)
+    code, c_und = _fix_undeclared_import(code, forge_output, file_map)
     code, c_iface = _fix_address_interface(code, forge_output)
     return code, [n for n, c in (("undeclared_import", c_und), ("address_interface", c_iface)) if c]
 

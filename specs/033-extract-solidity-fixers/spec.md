@@ -237,8 +237,11 @@ and stay green after the fixers move.
 - **SC-009 (FR-011 acceptance)**: the shared low-level helpers live in the utils module; BOTH
   `poc_queue_runner.py` and the fixer module import them; there is NO import cycle (verifiable: importing
   each module in isolation succeeds; a static/import check finds no pqr↔fixer-module cycle).
-- **SC-010 (FR-012/FR-014 acceptance)**: the five named sequence-functions exist and the two loops call
-  them (no inline fixer sequence remains in `synthesize_scaffold`/`_process_finding`); the commit-1
+- **SC-010 (FR-012/FR-014 acceptance)**: the named sequence-functions exist — **FOUR** in the
+  implementation, not five: `_seq_postmodel` serves BOTH post-model sites (draft & fix), whose sequences
+  are byte-identical, so the site-specific `stage` is emitted caller-side (a genuine no-op merge, not the
+  spec-034 unification; enforced by name in `tests/architecture/test_fixer_sites.py`) — and the two loops
+  call them (no inline fixer sequence remains in `synthesize_scaffold`/`_process_finding`); the commit-1
   differential test was GREEN (byte-identical inline vs extracted) and is removed by commit 2 (per-commit
   history shows it).
 

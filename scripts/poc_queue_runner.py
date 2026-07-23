@@ -2352,7 +2352,7 @@ def _process_finding(
             if _compiled(test.stdout, test.stderr):
                 break
             blob = test.stdout + "\n" + test.stderr
-            code, applied = _seq_draft_inplace(code, blob, symbol_index, file_map)
+            code, applied = _seq_draft_inplace(code, blob, file_map)
             if not applied:
                 break
             log({"event": "deterministic_fix", "finding_id": fid, "attempt": attempt, "fixes": applied})
