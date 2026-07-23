@@ -125,17 +125,17 @@ site inventory is an enforced invariant.
 
 ## Phase 6: Polish & cross-cutting
 
-- [ ] T015 Run the full suite `pytest -q` on the final tree — all pass UNCHANGED (SC-001); confirm zero
+- [X] T015 Run the full suite `pytest -q` on the final tree — all pass UNCHANGED (SC-001); confirm zero
   behavior change end-to-end.
-- [ ] T016 [P] Confirm the per-commit history satisfies SC-006 (each of the four commits is a reviewable
+- [X] T016 [P] Confirm the per-commit history satisfies SC-006 (each of the four commits is a reviewable
   no-op diff — extract / swap / move-utils / move-fixers) and SC-007/SC-010 (tests-first, differential
   was green then removed): `git log --stat` over the four commits.
-- [ ] T017 [P] Verify the guardrails can fail: break a named function's per-call arg
+- [X] T017 [P] Verify the guardrails can fail: break a named function's per-call arg
   (`import_paths(base_dir=synth_dir)` → `import_paths(project)`) → its characterization test FAILS; add a
   stray inline `_fix_*` call in a loop → the FR-009 architecture test FAILS. Revert (reverse Edit).
-- [ ] T018 [P] Confirm no target material (`pytest tests/architecture/test_no_target_material.py -q`) and
+- [X] T018 [P] Confirm no target material (`pytest tests/architecture/test_no_target_material.py -q`) and
   that `test_no_target_material` still scans `scripts/*.py` (it will now also cover the two new modules).
-- [ ] T019 [P] Add a landing entry to `docs/roadmap.md` for spec 033: the import-path bug class recurred
+- [X] T019 [P] Add a landing entry to `docs/roadmap.md` for spec 033: the import-path bug class recurred
   3× because the fixers were scattered + two near-duplicate repair loops hand-inlined their sequences;
   the fix extracts the fixers into `solidity_fixers` (+ shared `solidity_utils` to break the cycle) and
   pins each of the five sequences with characterization tests + a name-keyed architecture inventory; a
