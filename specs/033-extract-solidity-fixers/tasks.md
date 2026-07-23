@@ -67,13 +67,13 @@ proven by a differential test whose inline side is CAPTURED from the real loop. 
 
 ### Implementation
 
-- [ ] T006 [US2] In `scripts/poc_queue_runner.py`, replace each loop's inline transform sequence with a
+- [X] T006 [US2] In `scripts/poc_queue_runner.py`, replace each loop's inline transform sequence with a
   call to its named function (synth loop ~L916/L962; drafting in-place ~L2613; drafting post-model draft
   ~L2556 and fix ~L2759). Keep each loop's own recompile/bound control flow and the SAME events
   (`postfix_imports`/`scaffold_repair`/`deterministic_fix`, same shape — FR-006).
-- [ ] T007 Delete `tests/unit/test_fixer_extraction_diff.py` (its job is done — the characterization
+- [X] T007 Delete `tests/unit/test_fixer_extraction_diff.py` (its job is done — the characterization
   tests now pin the functions).
-- [ ] T008 Run `pytest -q` (esp. the 031 `scaffold_repair` / 032 `deterministic_fix` / import-path
+- [X] T008 Run `pytest -q` (esp. the 031 `scaffold_repair` / 032 `deterministic_fix` / import-path
   tests) — GREEN, no behavior change. **COMMIT 2** (swap + drop gate).
 
 ---

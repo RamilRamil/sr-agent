@@ -913,7 +913,7 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
     # was SHOWN (which sits at a different depth), so they land off by one `../` — the synth base
     # lives at audit/poc/_synth/, deeper than audit/poc/. We know the real paths: rewrite them to the
     # exact relpath from the synth file's OWN dir (deterministic; not the model's job to count `../`).
-    code, _ = _fix_import_paths(code, project, base_dir=synth_dir)
+    code, _ = _seq_synth_prewrite(code, project, synth_dir)
 
     # Compile-validate: a minimal test that INHERITS the base — if the base's imports,
     # types, and deploy code all type-check, this builds (feature 011 FR-004's bar is COMPILE).
@@ -959,11 +959,7 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
                      "repair_rounds": rnd - 1})
                 return synth_path
             blob = test.stdout + "\n" + test.stderr
-            code, c_imp = _fix_import_paths(code, project, base_dir=synth_dir)
-            code, c_nest = _fix_nested_type_imports(code, symbol_index)
-            code, c_iface = _fix_address_interface(code, blob)
-            applied = [n for n, c in (("import_paths", c_imp), ("nested_imports", c_nest),
-                                      ("address_interface", c_iface)) if c]
+            code, applied = _seq_synth_repair(code, blob, project, synth_dir, symbol_index)
             if not applied:  # nothing left to fix deterministically → give up (no redundant recompile)
                 # Say WHY we gave up. Without this the give-up is silent: the log jumps straight from
                 # `scaffold_insufficient` to `scaffold_synthesis_failed`, and there is no way to tell
@@ -1631,6 +1627,16 @@ def _seq_postmodel(code: str, project: Path, symbol_index, file_map: str, scaffo
     if base_changed:
         applied.append("scaffold_base")
     return code, applied
+
+
+# Post-model applied-fixer name → its run-log event (the loops emit one per `applied` entry,
+# in order, preserving the byte-identical per-fixer events the inline sequence emitted).
+_POSTMODEL_EVENT = {
+    "setup_override": "postfix_setup",
+    "import_paths": "postfix_imports",
+    "nested_imports": "postfix_nested_import",
+    "scaffold_base": "postfix_scaffold_base",
+}
 
 
 def _sig_by_method(callable_api: str, method: str) -> str:
@@ -2608,19 +2614,9 @@ def _process_finding(
     if not code.strip():
         log({"event": "draft_failed", "finding_id": fid, "error": "no Solidity in model reply"})
         return "draft_failed"
-    if guard:
-        code, changed = _fix_setup_override(code)
-        if changed:
-            log({"event": "postfix_setup", "finding_id": fid, "stage": "draft"})
-    code, ip_changed = _fix_import_paths(code, args.project)
-    if ip_changed:
-        log({"event": "postfix_imports", "finding_id": fid, "stage": "draft"})
-    code, nested_changed = _fix_nested_type_imports(code, symbol_index, file_map)
-    if nested_changed:
-        log({"event": "postfix_nested_import", "finding_id": fid, "stage": "draft"})
-    code, base_changed = _fix_scaffold_base(code, scaffold)
-    if base_changed:
-        log({"event": "postfix_scaffold_base", "finding_id": fid, "stage": "draft"})
+    code, applied = _seq_postmodel(code, args.project, symbol_index, file_map, scaffold, guard)
+    for _fx in applied:
+        log({"event": _POSTMODEL_EVENT[_fx], "finding_id": fid, "stage": "draft"})
 
     outcome = "unknown"
     verify_reason = ""            # feature 025: why falsification didn't run (passed_unchecked)
@@ -2666,9 +2662,7 @@ def _process_finding(
             if _compiled(test.stdout, test.stderr):
                 break
             blob = test.stdout + "\n" + test.stderr
-            code, c_und = _fix_undeclared_import(code, blob, symbol_index, file_map)
-            code, c_iface = _fix_address_interface(code, blob)
-            applied = [n for n, c in (("undeclared_import", c_und), ("address_interface", c_iface)) if c]
+            code, applied = _seq_draft_inplace(code, blob, symbol_index, file_map)
             if not applied:
                 break
             log({"event": "deterministic_fix", "finding_id": fid, "attempt": attempt, "fixes": applied})
@@ -2811,19 +2805,9 @@ def _process_finding(
         if not code.strip():
             log({"event": "fix_no_code", "finding_id": fid, "attempt": attempt})
             code = prev_code or code
-        if guard:
-            code, changed = _fix_setup_override(code)
-            if changed:
-                log({"event": "postfix_setup", "finding_id": fid, "stage": f"fix{attempt}"})
-        code, ip_changed = _fix_import_paths(code, args.project)
-        if ip_changed:
-            log({"event": "postfix_imports", "finding_id": fid, "stage": f"fix{attempt}"})
-        code, nested_changed = _fix_nested_type_imports(code, symbol_index, file_map)
-        if nested_changed:
-            log({"event": "postfix_nested_import", "finding_id": fid, "stage": f"fix{attempt}"})
-        code, base_changed = _fix_scaffold_base(code, scaffold)
-        if base_changed:
-            log({"event": "postfix_scaffold_base", "finding_id": fid, "stage": f"fix{attempt}"})
+        code, applied = _seq_postmodel(code, args.project, symbol_index, file_map, scaffold, guard)
+        for _fx in applied:
+            log({"event": _POSTMODEL_EVENT[_fx], "finding_id": fid, "stage": f"fix{attempt}"})
 
     # `forge test --match-path` only selects which tests RUN, not which
     # files get COMPILED — every *.t.sol under FOUNDRY_TEST is compiled as
