@@ -103,10 +103,18 @@ stay green after the move.
 - **FR-002**: Every existing call site — harness AND tests — MUST keep working via import or re-export
   from `poc_queue_runner.py`; no test LOGIC may change.
 - **FR-003**: Each fixer's output MUST be byte-identical to before for the same inputs (pure move).
+  This is verified INDIRECTLY by the existing per-fixer unit tests (which already assert each fixer's
+  output) plus the new characterization tests — NO separate differential harness is intended.
 - **FR-004**: The five transform-application sites MUST keep their EXACT current sequences (order,
   per-call args, and which transforms) — this spec does NOT unify or alter any sequence.
 - **FR-005**: Characterization tests MUST pin each site's sequence: given a recorded/synthetic forge
-  output + input code, the sequence's OUTPUT is asserted — green before and after the move.
+  output + input code, the sequence's OUTPUT is asserted.
+- **FR-005a (test-first ordering — the crux)**: the characterization tests MUST be authored and
+  committed FIRST, GREEN on the PRE-MOVE tree, as a SEPARATE commit BEFORE the move commit. A
+  characterization test written during or after the move (or by reading already-moved code)
+  characterizes the NEW behavior and proves nothing while looking rigorous. This ordering is what turns
+  the spec from "no-op by assertion" into a "verifiable no-op" (and matches the constitution's
+  test-first gate for sensitive behavior); SC-006's per-commit diff makes it checkable.
 - **FR-006**: The run-log events (`postfix_imports`, `scaffold_repair`, `deterministic_fix`) MUST keep
   the same names and field shapes.
 - **FR-007**: NO fixer logic, NO sequence, NO error class, NO model call may change; the compile/pass
@@ -115,6 +123,17 @@ stay green after the move.
 - **FR-008**: The refactor MUST be validated by the full existing offline suite passing UNCHANGED plus
   the new characterization tests; no forge/model/network in tests; no target material
   (`test_no_target_material.py`).
+- **FR-009 (site inventory as an enforced invariant)**: an ARCHITECTURE test (under `tests/architecture/`)
+  MUST enumerate the fixer call sites and assert the KNOWN set — so adding a SIXTH site becomes a
+  conscious, declared change (update the assertion) rather than a silent one that gets an unpinned
+  sequence and re-opens the bug class. Without this, "five sites" is a comment, not an invariant (specs
+  031 and 032 each added a site within days — a sixth is likely).
+- **FR-010 (re-exports are transitional, not the goal)**: re-exports from `poc_queue_runner.py` keep the
+  old call sites working, but they MUST be marked TRANSITIONAL (a deprecation note + a follow-up to
+  remove them); INTERNAL callers inside the new module MUST call the module's own functions directly,
+  never the pqr re-export. NOTE for future test authors: once fixers are called inside the new module,
+  a `monkeypatch.setattr(pqr, "_fix_…")` on a re-exported name would patch a symbol NOBODY calls and
+  PASS VACUOUSLY — future tests MUST patch the new module's symbol, not the pqr re-export.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -130,20 +149,28 @@ stay green after the move.
 ### Measurable Outcomes
 
 - **SC-001**: The full existing test suite passes UNCHANGED after the move (no test-logic edits).
-- **SC-002**: The fixers live in the new module; `poc_queue_runner.py` shrinks by the moved block.
+- **SC-002**: NO fixer LOGIC remains in `poc_queue_runner.py` — the fixer definitions live in the new
+  module; `poc_queue_runner.py` holds at most TRANSITIONAL re-exports (verified structurally: no `def
+  _fix_*` bodies in pqr — NOT merely "the file got shorter", which a re-export would satisfy without
+  changing coupling).
 - **SC-003**: Each of the five sites keeps its exact sequence; a characterization test pins each
   (including the drafting in-place site's ABSENCE of `import_paths`).
 - **SC-004**: Each fixer's output is byte-identical to before (existing fixer tests pass as-is).
 - **SC-005**: The loop events are unchanged in name and shape (existing 031/032 loop tests pass as-is).
 - **SC-006**: `git diff` shows a move + re-export + new tests only — no fixer logic or sequence change
   (reviewable as a pure no-op).
+- **SC-007**: The characterization tests land in a SEPARATE commit that is GREEN on the PRE-MOVE tree
+  (per-commit history shows tests-first, then the move) — FR-005a.
+- **SC-008**: An architecture test asserts the enumerated set of fixer call sites; adding a site fails it
+  until the set is consciously updated (FR-009).
 
 ## Assumptions
 
 - The transforms are cohesive pure functions that can move together; they depend only on `_path_for`/
   the index/file-map, which move with them or are passed in.
-- Re-exporting moved symbols from `poc_queue_runner.py` is preferred over editing many test import lines
-  — keeps the diff a pure move.
+- Re-exporting moved symbols from `poc_queue_runner.py` keeps the diff a pure move AND the old call
+  sites working — but it is TRANSITIONAL (FR-010): the coupling win comes from removing them later, not
+  from the re-export itself.
 - Characterization tests over SYNTHETIC forge outputs (matching the real shapes captured in the run logs)
   are a sufficient guardrail; recording real (sanitized, invented-name) forge shapes is acceptable.
 - The five sites' sequence differences are LEFT intact here; whether any should be unified/closed is a
@@ -151,9 +178,10 @@ stay green after the move.
 
 ## Out of Scope
 
-- Any UNIFICATION of the transform sequences or the shared "one helper" — deliberately deferred to a
-  separate, explicitly-measured spec (034), because it CHANGES behavior and needs its own evidence
-  (e.g. does giving the drafting in-place step `import_paths` actually improve compile-convergence?).
+- Any UNIFICATION of the transform sequences or the shared "one helper" — deliberately deferred to
+  spec **034** (created as a DEFERRED stub, `specs/034-unify-fixer-sequences/`), because it CHANGES
+  behavior and needs its own evidence (its proof-question: does giving the drafting in-place step
+  `import_paths` actually improve compile-convergence?).
 - Splitting grounding / drafting / falsification / CLI out of the monolith — a later cut; this spec
   extracts ONLY the deterministic-fixer functions.
 - Changing ANY fixer's logic or adding error classes.
