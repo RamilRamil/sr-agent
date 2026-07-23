@@ -524,17 +524,35 @@ def _attach_fixes(raw_tasks: list, report_text: str,
 
 
 def extract_tasks(client: GenClient, report_path: Path, tracer=NOOP_TRACER,
-                  operator_patches: dict[str, str] | None = None) -> list[dict]:
-    """Step 1 (default path) — the MODEL reads the report file and composes its own task list."""
+                  operator_patches: dict[str, str] | None = None, log=None) -> list[dict]:
+    """Step 1 (default path) — the MODEL reads the report file and composes its own task list.
+
+    Robust to hosted/reasoning models: the generate call is RETRIED on a transient transport
+    failure AND on an EMPTY reply (a reasoning model can return no `content`), markdown fences
+    are stripped before parsing, and a non-JSON reply raises a clear error instead of an opaque
+    `Expecting value: line 1 column 1 (char 0)`."""
     report = report_path.read_text(encoding="utf-8")
     operator_patches = operator_patches or {}
+    _log = log or (lambda _e: None)
     prompt, _ = _resolve_prompt(tracer, "poc-extract", EXTRACT_PROMPT, report=report)
-    raw = client.generate(
-        prompt,
-        fmt="json",
-        options={"num_ctx": NUM_CTX, "num_predict": EXTRACT_PREDICT},
-    )
-    data = json.loads(raw)
+
+    def _gen() -> str:
+        raw = client.generate(
+            prompt, fmt="json",
+            options={"num_ctx": NUM_CTX, "num_predict": EXTRACT_PREDICT},
+        )
+        raw = _strip_fences(raw or "").strip()
+        if not raw:                       # empty content (e.g. reasoning ate the budget) → retryable
+            raise OpenRouterUnavailable("task extraction returned an empty reply (no JSON content)")
+        return raw
+
+    raw = _call_with_retry(_gen, log=_log, stage="extract", fid="-")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        # Clear, target-free diagnostic (never echo the reply text — it carries report material).
+        raise json.JSONDecodeError(
+            f"task-extraction reply was not valid JSON (len={len(raw)}): {e.msg}", e.doc, e.pos)
     tasks = data.get("tasks", []) if isinstance(data, dict) else data
     return _attach_fixes(tasks, report, operator_patches)
 
@@ -2722,7 +2740,7 @@ def main() -> None:
     try:
         tasks = (load_pinned_tasks(args.tasks_from, args.report, operator_patches)
                  if args.tasks_from
-                 else extract_tasks(client, args.report, tracer, operator_patches))
+                 else extract_tasks(client, args.report, tracer, operator_patches, log=log))
     except (*MODEL_ERRORS, json.JSONDecodeError, OSError) as e:
         log({"event": "extract_failed", "error": str(e)})
         sys.exit(1)
