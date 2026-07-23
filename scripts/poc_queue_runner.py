@@ -1638,21 +1638,44 @@ def extract_fix_for_finding(report_text: str, task: dict) -> str | None:
     into finding-sections (`[NN] **N. Title**` … next heading), matches `task` to
     the section whose heading best token-overlaps `task['title']`, and returns that
     section's fenced ```diff``` block verbatim, or None when there is no diff or no
-    confident match."""
+    confident match.
+
+    Confident match (hardened — a wrong fix produces a FALSE `verified`, worse than
+    `no_fix`): the overlap must be anchored on a DISTINCTIVE token, not shared audit
+    words. Tokens are weighted by inverse document-frequency across the headings — a
+    term in one heading (a finding's own identifier like `finalizeWithFee`) counts far
+    more than one in many (`wrong`, `owner`, `reserved`). A match needs ≥2 shared
+    tokens AND at least one ANCHOR — a shared token that is both rare (in ≤2 headings)
+    AND long (≥7 chars: a finding-specific identifier/term, not a short audit word like
+    `owner`/`slot`/`wrong`). Otherwise it is "no confident fix" — a finding must not
+    borrow another finding's diff by coincidental generic overlap."""
     headings = list(_FINDING_HEADING_RE.finditer(report_text))
     if not headings:
         return None
     want = _title_tokens(task.get("title", ""))
     if not want:
         return None
-    best_i, best_overlap = -1, 0
-    for i, h in enumerate(headings):
-        overlap = len(want & _title_tokens(h.group(1)))
-        if overlap > best_overlap:
-            best_i, best_overlap = i, overlap
-    # Require a real overlap (at least 2 shared significant tokens) — a weak match
-    # is treated as "no confident fix" rather than risk pulling the wrong diff.
-    if best_i < 0 or best_overlap < 2:
+    htoks = [_title_tokens(h.group(1)) for h in headings]
+    df: dict[str, int] = {}
+    for hs in htoks:
+        for t in hs:
+            df[t] = df.get(t, 0) + 1
+    best_i, best_score, best_shared = -1, 0.0, set()
+    for i, hs in enumerate(htoks):
+        shared = want & hs
+        if not shared:
+            continue
+        score = sum(1.0 / df[t] for t in shared)   # rarer (distinctive) tokens dominate
+        if score > best_score:
+            best_i, best_score, best_shared = i, score, shared
+    # Confident match needs BOTH: an ANCHOR (a shared token that is rare df≤2 AND long
+    # ≥7 chars — a finding-specific term) AND DOMINANCE (the overlap explains ≥60% of THIS
+    # finding's own tokens). Anchor alone still let a low-severity finding borrow a
+    # high-severity section's diff when they share a component identifier (measured: 3
+    # spurious L-matches at frac_want 0.38–0.50 vs the real 0.82–1.00 self-matches).
+    anchored = any(df[t] <= 2 and len(t) >= 7 for t in best_shared)
+    dominant = len(best_shared) >= 0.6 * len(want)
+    if best_i < 0 or len(best_shared) < 2 or not (anchored and dominant):
         return None
     start = headings[best_i].end()
     end = headings[best_i + 1].start() if best_i + 1 < len(headings) else len(report_text)
