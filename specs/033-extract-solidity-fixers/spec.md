@@ -177,6 +177,17 @@ and stay green after the fixers move.
   the same inputs. It is removed in commit 2 once the loop calls the extracted function. This is exactly
   the differential check FR-003 rejects for the fixers (redundant there) — but here it is the ONLY thing
   that gates the extraction, the one step no other test covers.
+  - **The inline side MUST be captured by RUNNING THE REAL loop, not transcribed.** The differential
+    test MUST obtain the inline output by executing the actual pre-extraction loop
+    (`synthesize_scaffold` / `_process_finding`) through its existing stub seams and CAPTURING the
+    artifact the loop WRITES (synth: `synth_path.write_text(code)` each round; drafting: `write_poc(...)`)
+    — via a `run_tests` stub that reads the written file at call time (working precedent already in the
+    repo: `test_synthesize_smoke_uses_relative_import` captures the smoke file exactly this way). It MUST
+    NOT re-transcribe the sequence in the test and compare that to the extracted function: that compares
+    the extraction to a SECOND transcription (vacuous), and — critically — it would AGREE on a mis-copied
+    per-call arg (the class that bites most here: `import_paths(base_dir=synth_dir)` in synthesis vs
+    `import_paths(project)` in drafting), greening the gate while the extraction stays wrong. A passing
+    check that checks nothing is the same failure `_poc_defects` exists to catch.
 
 ### Key Entities *(include if feature involves data)*
 
