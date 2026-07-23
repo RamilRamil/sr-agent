@@ -47,6 +47,11 @@ STAGES = ("extracted", "draft", "compiled", "real_pass", "verified")
 NOT_EXTRACTED = "not_extracted"
 ERROR = "error"
 
+# Grace over the harness's own `--max-minutes` budget before the eval hard-kills the child: the
+# harness should always get to stop itself and report first, so this trips only on a real wedge
+# (a stuck forge/Docker child the harness's in-loop budget cannot interrupt).
+_HARNESS_TIMEOUT_MARGIN_S = 300.0
+
 
 class ProofBenchError(Exception):
     """Bad dataset root / case manifest / missing fix — always loud, never a silent skip."""
@@ -432,7 +437,22 @@ def run_case(case: Case, config: RunConfig, *, image: str | None = None, fork: b
             if fork:
                 argv += ["--fork"]
             argv += ["--max-minutes", str(max_minutes)]
-            proc = subprocess.run(argv, capture_output=True, text=True)
+            # HARD timeout on the child. `--max-minutes` is only a budget the harness checks in its
+            # OWN loop — it cannot interrupt a wedged forge/Docker child, so without this a single
+            # stuck run blocks the whole C×N eval forever, with no output and no partial results
+            # (observed live: a via_ir container wedged for hours). On expiry the run is recorded
+            # honestly in the existing off-ladder ERROR bucket — infra, neither success nor a
+            # proving-failure — and the eval moves on. Margin over the harness's own budget so the
+            # harness gets to stop itself first and report, and only a real wedge trips this.
+            try:
+                proc = subprocess.run(argv, capture_output=True, text=True,
+                                      timeout=max_minutes * 60 + _HARNESS_TIMEOUT_MARGIN_S)
+            except subprocess.TimeoutExpired:
+                outcomes.append(CaseOutcome(
+                    case_id=case.case_id, run_idx=run_idx, stage=ERROR,
+                    outcome="harness_timeout", verify_reason="",
+                ))
+                continue
             events = _parse_events(proc.stdout)
             stage = _stage_of(events, case.finding_id)
             done = next((e for e in reversed(events) if e.get("event") == "task_done"), {})
