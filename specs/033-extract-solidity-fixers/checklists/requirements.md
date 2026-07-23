@@ -31,13 +31,18 @@
 
 ## Notes
 
-- This is a REFACTOR spec (behavior-preserving). Its oracle is the EXISTING test suite passing unchanged
-  — the strongest possible acceptance bar for a pure move. Names of internal components (`_fix_*`,
-  `poc_queue_runner.py`, the loop events) appear because they ARE the subject of the move — domain
-  vocabulary, same convention as specs 024–032.
-- Motivated by an evidenced structural risk: the import-path bug class recurred 3× in one day and the
-  duplicate loops caused a mis-targeted mutation-test (memory `project_poc_runner_monolith`).
-- Deliberately NARROW: only the deterministic-fixer layer moves; grounding/drafting/falsification/CLI
-  splitting is a later cut. Scope is bounded so the refactor stays a reviewable, test-green pure move.
-- No target material: a refactor of harness code; no fixtures change.
+- **REVISED after a review caught an internal contradiction**: the original spec claimed BOTH "remove
+  the duplication between the two repair loops" AND "zero functional change". Those cannot both hold —
+  the five transform-application sites have divergent sequences (the in-place drafting step never runs
+  `import_paths`; `import_paths` runs with a different base in synthesis), and unifying them WOULD change
+  behavior, while the existing unit tests pin fixers individually (not the sequence). So this spec is now
+  the honest NO-OP: MOVE the fixer functions + PIN each site's sequence with characterization tests.
+  Any UNIFICATION is deferred to a separate, explicitly-measured spec (034).
+- Oracle = the EXISTING suite passing UNCHANGED + new characterization tests that capture the sequences
+  before any future change. Strongest possible bar for a pure move.
+- Names of internal components appear because they ARE the subject of the move — domain vocabulary.
+- Motivated by an evidenced structural risk: the import-path bug class recurred 3× in one day (memory
+  `project_poc_runner_monolith`); consolidating the FUNCTIONS fixes the logic-bug cause at the function
+  level, and the characterization tests make the future sequence-unification safe.
+- No target material: a refactor of harness code; fixtures are invented/synthetic forge shapes.
 ```
