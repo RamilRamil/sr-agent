@@ -21,11 +21,15 @@ to apply mechanical fixes. The two dominant classes ARE mechanical → fix them 
 - **Alternatives**: try to fix wrong-arg-count from `callable_api` — rejected (choosing/ordering args
   is semantic, high false-fix risk).
 
-## Decision 2 — Apply error-driven transforms to the FAILING code, before the model fix (not after)
+## Decision 2 — Apply error-driven transforms to the FAILING code, before the model fix, IN-PLACE
 
-- **Decision**: Apply `_fix_undeclared_import` and `_fix_address_interface` to the just-failed `code`,
-  keyed on THAT compile's forge output, BEFORE calling the model `fix()`; if either changes the code,
-  recompile it deterministically (via the loop's next iteration) and skip the model fix that round.
+- **Decision**: On the compiled-FALSE branch, before the model `fix()`, run a BOUNDED in-place sub-step
+  (`DET_REPAIR_ROUNDS` ~2): apply `_fix_undeclared_import` + `_fix_address_interface` to the just-failed
+  `code` (keyed on THAT compile's forge output); if either changes the code, write + RE-RUN `run_tests`
+  in-place (NOT via a new `for attempt` iteration); accept the moment it compiles; stop when a round
+  changes nothing. The sub-step does NOT advance the attempt counter, so it does NOT consume a model
+  attempt (remediation A1/SC-008 — a mechanical fix must not starve the model's exploit-logic attempts;
+  the loop is `for attempt in range(1, args.attempts+1)`, so a naive `continue` WOULD consume one).
 - **Rationale**: `_fix_address_interface` is LINE-NUMBER-keyed (it locates the flagged argument by the
   error's `file:line`). The model `fix()` rewrites the whole PoC, so the OLD error's line number would
   point at the wrong line in the NEW code — a line-drift mis-edit. Applying the transform to the code

@@ -24,14 +24,18 @@ The 9553 transform, now ALSO invoked in the drafting loop's deterministic repair
 synthesis-only). Line-number-keyed → applied to the FAILING code (valid line numbers), not the model's
 rewrite.
 
-### Deterministic-repair step (new, in the loop)
-On a compiled-FALSE attempt with attempts remaining, before the model `fix()`: run both transforms on
-the just-failed `code` keyed on `test.stdout+test.stderr`. If either changed the code → set `code` to
-the repaired version, log `deterministic_fix`, and `continue` (recompile next iteration, no model
-call). Else → model `fix()` as today.
-- **Invariants**: no model call in the step; idempotency ⇒ it cannot loop; the compile/pass verdict is
-  unchanged (a real recompile still decides); only the compile-FALSE branch is touched (exploit-logic
-  path untouched).
+### Deterministic-repair sub-step (new, in the loop — bounded, in-place)
+On a compiled-FALSE branch, before the model `fix()`: a `while` up to `DET_REPAIR_ROUNDS` — apply both
+transforms to `code` keyed on `test.stdout+test.stderr`; if either changed the code → log
+`deterministic_fix`, write the PoC, and RE-RUN `run_tests` IN-PLACE (update `test`/`compiled`); accept
+on compile, stop on no-change. Then proceed with the (possibly now-compiled) result; else model `fix()`.
+- **Invariants**: no model call in the sub-step; it does NOT advance the `attempt` counter (does not
+  consume the `--attempts` budget — A1); bounded by `DET_REPAIR_ROUNDS` + idempotency ⇒ cannot loop; a
+  real recompile still decides the verdict; only the compile-FALSE branch is touched (exploit-logic path
+  untouched).
+
+### `DET_REPAIR_ROUNDS` (new module constant)
+Fixed cap (~2) on the in-place deterministic-repair rounds per attempt. No CLI flag.
 
 ## Events (run-log records)
 

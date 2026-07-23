@@ -100,8 +100,9 @@ records the applied fix(es). Verified offline.
 
 ### Edge Cases
 
-- **Undeclared name is ambiguous** (the index reports it as "not unique"): treat as NOT safely
-  resolvable — do not auto-import (leave to the model); never guess which of several definitions.
+- **Undeclared name not resolvable to a single real path**: the file-map maps each project symbol to
+  ONE path by construction, so the auto-import is single-path; a name the file-map does NOT resolve is
+  left for the model (never guessed) — this is the same anti-invention gate as US2.
 - **No index / no file map available** (`--no-symbol-index`): the auto-import transform is a no-op
   (it cannot resolve names) — never an error; behavior degrades to today's.
 - **Non-mechanical compile errors** (wrong-arg-count, invalid-token, cannot-instantiate-interface,
@@ -122,14 +123,19 @@ records the applied fix(es). Verified offline.
   index/file-map resolves to a real defining file, the harness MUST add the missing import for `X`.
 - **FR-002**: The auto-import MUST use the project's real path for `X` (the same resolution the harness
   already uses for import fixing), and MUST be idempotent (a name already imported is not re-added).
-- **FR-003**: The harness MUST NOT auto-import a name that is NOT a known top-level symbol (a typo /
-  invented identifier) or that the index reports as ambiguous — such names are left for the model/hint
-  (the anti-invention invariant).
+- **FR-003**: The harness MUST NOT auto-import a name that is NOT a known top-level symbol the file-map
+  resolves to a real path (a typo / invented identifier) — such names are left for the model/hint (the
+  anti-invention invariant).
+- **FR-003a**: The deterministic repair happens IN-PLACE within a single attempt (a bounded number of
+  apply-transforms-then-recompile rounds) and MUST NOT consume the `--attempts` budget — a mechanical
+  fix must not starve the model's exploit-logic attempts. It is bounded (a fixed round cap + the
+  transforms' idempotency) so it cannot loop.
 - **FR-004**: The existing deterministic address→interface transform MUST also be applied in the
   drafting loop's deterministic post-fix pass (not only in scaffold synthesis).
-- **FR-005**: These transforms MUST be added to the SAME deterministic post-fix pass the harness
-  already runs after each draft/fix; when a transform changes the code the existing loop rewrites the
-  PoC and recompiles on the next attempt — no new control flow.
+- **FR-005**: When a transform changes the code, the harness MUST rewrite the PoC and RECOMPILE it
+  IN-PLACE (within the same attempt, bounded rounds) to decide the compile verdict — never trusting a
+  fix without a real recompile — and only fall through to the model `fix()` when the deterministic
+  transforms can no longer change the code.
 - **FR-006**: The transforms MUST be deterministic and line/symbol-scoped (never touch an unflagged
   line), MUST NOT make any model call, and MUST NOT change the compile/pass verdict or the
   exploit-logic path.
@@ -173,6 +179,9 @@ records the applied fix(es). Verified offline.
 - **SC-007**: The semantic error classes, the compile/pass verdict, `_poc_defects`, the fork oracle,
   `mutation_verify`, the 029 trace feedback, and scaffold synthesis are unchanged (their existing tests
   still pass).
+- **SC-008**: A deterministic repair does NOT consume a model attempt — after a deterministic fix, the
+  model still has its full remaining `--attempts` for exploit logic (verified: a driven attempt whose
+  compile is resolved deterministically does not advance the attempt counter / call the model fix).
 
 ## Assumptions
 

@@ -75,20 +75,27 @@ output has a 9553, applies `_fix_address_interface` and skips the model fix.
 ### Tests for US3
 
 - [ ] T009 [P] [US3] Test in `tests/integration/test_poc_runner_loop.py`: drive the loop (model/forge
-  seams stubbed) so attempt 1 compiles-FALSE with a synthetic 9553 forge output on a `setter(address(x))`
-  line; assert the next attempt's written code has `Type(address(x))` (the deterministic fix), a
-  `deterministic_fix` event fired, and the model `fix()` was NOT called for that round (FR-004/FR-005).
+  seams stubbed: `run_tests` returns compile-FALSE-with-9553 THEN compiled) so an attempt compiles-FALSE
+  with a synthetic 9553 on a `setter(address(x))` line; assert the code is deterministically fixed to
+  `Type(address(x))`, a `deterministic_fix` event fired, the model `fix()` was NOT called, AND the
+  deterministic repair did NOT consume an attempt — the model retains its full remaining budget
+  (SC-008): e.g. the finding still reaches the model on a LATER attempt / `attempt` did not advance for
+  the deterministic round (FR-004/FR-005/SC-008).
 
 ### Implementation for US3
 
-- [ ] T010 [US1+US3] Add the deterministic error-driven repair step in the drafting loop
-  (`scripts/poc_queue_runner.py`, in the compile-FALSE repair branch, BEFORE the `_call_with_retry(...
-  fix ...)` call ~L2644): compute `blob = test.stdout + test.stderr`; `code2, c_und =
-  _fix_undeclared_import(code, blob, symbol_index, file_map)`; `code2, c_iface =
-  _fix_address_interface(code2, blob)`; if `c_und or c_iface`: `code = code2`, emit `deterministic_fix`
-  (finding_id, attempt, fixes), and `continue` (the loop rewrites+recompiles next iteration — NO model
-  `fix()` this round). Else fall through to the model `fix()` unchanged. Idempotency prevents a loop
-  (research Decision 4).
+- [ ] T010 [US1+US3] Add `DET_REPAIR_ROUNDS` (~2) and a BOUNDED IN-PLACE deterministic-repair sub-step
+  in the drafting loop (`scripts/poc_queue_runner.py`, on the compile-FALSE branch, BEFORE the
+  `_call_with_retry(... fix ...)` call ~L2644): a `while` up to `DET_REPAIR_ROUNDS` — `blob =
+  test.stdout + test.stderr`; `code, c_und = _fix_undeclared_import(code, blob, symbol_index,
+  file_map)`; `code, c_iface = _fix_address_interface(code, blob)`; if `c_und or c_iface`: emit
+  `deterministic_fix` (finding_id, attempt, fixes), `write_poc`, RE-RUN `run_tests` IN-PLACE (update
+  `test`/`compiled`); if now compiled → break; else if no change → break. This does NOT advance the
+  `for attempt` counter (does NOT consume a model attempt — A1/SC-008). After the sub-step, if compiled
+  the attempt proceeds (real_pass/verdict as today); else the model `fix()` runs as today. Runs on the
+  compile-FALSE branch for BOTH the draft (attempt 1) failure and fix rounds. Bounded by
+  `DET_REPAIR_ROUNDS` + idempotency ⇒ cannot loop (A2 addressed: `_path_for` single-path resolution is
+  the anti-invention gate).
 
 **Checkpoint**: US1–US3 testable — T002–T009 pass; the harness fixes the two mechanical classes itself.
 

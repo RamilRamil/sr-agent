@@ -38,8 +38,9 @@ SAVES a model call (~46s) + often a whole attempt — net faster/cheaper, not sl
 KNOWN symbol); line/symbol-scoped (never touch an unflagged line); compile/pass verdict and the
 exploit-logic path unchanged.
 
-**Scale/Scope**: ~1 new `_fix_undeclared_import` transform, a small deterministic-repair step in the
-loop that reuses it + `_fix_address_interface`, an event, tests. No new files.
+**Scale/Scope**: ~1 new `_fix_undeclared_import` transform, a bounded in-place deterministic-repair
+sub-step (`DET_REPAIR_ROUNDS`) in the loop reusing it + `_fix_address_interface`, an event, tests. No
+new files. The sub-step recompiles in-place and does NOT consume the `--attempts` budget (A1).
 
 ## Constitution Check
 
@@ -96,15 +97,17 @@ one new pure transform helper in the same file. No new modules — consistent wi
    NOT resolve (typo/invention) is skipped. Ambiguous (index reports not-unique / `_path_for` empty) →
    skipped. Idempotent. Line-agnostic (adds an import at the top) — safe regardless of line drift.
 
-2. **Deterministic error-driven repair step in the loop** (`poc_queue_runner.py`, in the repair branch,
-   BEFORE the model `fix()`): on a compiled-FALSE attempt with attempts remaining, apply
-   `_fix_undeclared_import(code, test.stdout+test.stderr, symbol_index, file_map)` and
-   `_fix_address_interface(code, test.stdout+test.stderr)` to the JUST-FAILED code (line numbers valid,
-   see research Decision 2). If EITHER changed the code: log a `deterministic_fix` event with the
-   applied fix names, set `code` to the repaired version, and `continue` — the loop's next iteration
-   writes + recompiles it, NO model call. If neither changed: fall through to the model `fix()` exactly
-   as today. Idempotency (both transforms are idempotent) guarantees the deterministic step cannot loop
-   forever — a second pass produces no change and falls through to the model.
+2. **Deterministic error-driven repair — a bounded IN-PLACE sub-step** (`poc_queue_runner.py`, on the
+   compiled-FALSE branch, before the model `fix()`): a `while` up to `DET_REPAIR_ROUNDS` (~2): apply
+   `_fix_undeclared_import(code, blob, symbol_index, file_map)` and `_fix_address_interface(code, blob)`
+   to the JUST-FAILED code (blob = its own `test.stdout+stderr`; line numbers valid — research
+   Decision 2); if EITHER changed the code → log `deterministic_fix`, write the PoC, and RE-RUN
+   `run_tests` (update `test`/`compiled`, IN-PLACE — this does NOT advance the `for attempt` counter, so
+   it does not consume a model attempt — remediation A1/SC-008); if it now compiles → break out and let
+   the attempt proceed as compiled; if a round makes NO change → break. After the sub-step: if compiled,
+   proceed (real_pass/verdict as today); else, the model `fix()` runs as today (a fresh attempt).
+   Bounded by `DET_REPAIR_ROUNDS` + idempotency (a second pass on the same error changes nothing) → it
+   cannot loop.
 
 3. **The existing error-AGNOSTIC post-fix pass** (`_fix_import_paths` + `_fix_nested_type_imports` at
    the draft ~L2491 and fix ~L2665 sites) is UNCHANGED — it still runs on the model's output. The new
