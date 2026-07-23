@@ -56,7 +56,6 @@
   and the site-inventory an enforced invariant.
 - A dependency inventory (FR-011) MUST precede tasks.md, so the module boundary is decided with evidence,
   not blindly at implementation time (where it would most likely become a circular import).
-```
 - **REVISED AGAIN (4th review — bootstrap gap)**: the guardrail could not protect the step that CREATES
   it — FR-005a wanted characterization tests green on the "pre-move tree", but they call the named
   sequence-functions which only exist AFTER FR-012's extraction (the riskiest step: rewriting two of the
@@ -67,3 +66,5 @@
   was green). Out of Scope corrected: this is NOT "only the fixer functions" — it moves shared helpers +
   edits two loop bodies; the boundary is "no LOGIC/sequence change", not "one file". SC-006's no-op-diff
   bar now applies PER COMMIT.
+
+```
