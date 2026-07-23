@@ -11,9 +11,12 @@ Pure moves — the logic is byte-identical to its previous home in poc_queue_run
 """
 from __future__ import annotations
 
+import logging
 import re
 import subprocess
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 POC_SUBDIR = "audit/poc"            # PoCs live here; needs FOUNDRY_TEST override
 
@@ -30,7 +33,13 @@ def _tracked_sol(project: Path) -> set[Path]:
         out = subprocess.run(["git", "-C", str(project), "ls-files", "*.sol"],
                              capture_output=True, text=True, timeout=15)
         return {(project / line).resolve() for line in out.stdout.splitlines() if line.strip()}
-    except Exception:
+    except Exception as e:
+        # E1 (feature 033 follow-up): a git failure here silently drops the tracked-source
+        # PREFERENCE in _fix_import_paths (candidates fall back to ALL matches, not just the
+        # original repo's). Surface it once — the degradation was invisible before. The
+        # deterministic shallowest-path sort keeps the pick stable even in this degraded mode.
+        logger.warning("git ls-files failed in %s — tracked-source preference disabled: %s",
+                       project, e)
         return set()
 
 

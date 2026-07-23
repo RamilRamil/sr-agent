@@ -57,17 +57,13 @@ from scripts.solidity_utils import (  # feature 033: shared low-level helpers (s
     POC_SUBDIR, _SCAFFOLD_CONTRACT_RE, _SCAFFOLD_IS_RE, _SKIP_DIRS, _path_for,
     _scaffold_base_name, _strip_comments, _tracked_sol,
 )
-# feature 033: the deterministic compile-fixer layer lives in scripts.solidity_fixers now.
-# These imports RE-EXPORT the fixers + named sequence-functions so existing call sites AND
-# tests referencing `pqr._fix_*` keep working. TRANSITIONAL (FR-010): a follow-up should
-# remove the re-exports and point external callers/tests at scripts.solidity_fixers directly.
-# NOTE for future test authors: patch `solidity_fixers._fix_…`, NOT the pqr re-export — the
-# internal callers (the _seq_* functions) live in solidity_fixers and call the fixers directly,
-# so a monkeypatch on the pqr name would patch a symbol nobody calls and pass VACUOUSLY.
-from scripts.solidity_fixers import (  # noqa: F401  (re-exported for call sites + tests)
-    _POSTMODEL_EVENT, _brace_block, _fix_address_interface, _fix_import_paths,
-    _fix_nested_type_imports, _fix_scaffold_base, _fix_setup_override, _fix_undeclared_import,
-    _seq_draft_inplace, _seq_postmodel, _seq_synth_prewrite, _seq_synth_repair,
+# feature 033: the deterministic compile-fixer layer lives in scripts.solidity_fixers now. The
+# two repair loops call the named sequence-functions (_seq_*), so those + _POSTMODEL_EVENT are the
+# ONLY symbols pqr imports from there. The individual _fix_* are NOT re-exported (FR-010 cleanup):
+# every caller — including tests — imports them from scripts.solidity_fixers directly, so a
+# monkeypatch always targets the symbol the _seq_* actually call (no vacuous re-export to patch).
+from scripts.solidity_fixers import (
+    _POSTMODEL_EVENT, _seq_draft_inplace, _seq_postmodel, _seq_synth_prewrite, _seq_synth_repair,
 )
 
 # Any model-transport failure — local (Ollama) OR hosted (Gemini/OpenRouter). The
