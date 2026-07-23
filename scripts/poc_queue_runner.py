@@ -965,11 +965,30 @@ def synthesize_scaffold(project: Path, task: dict, missing_types: list[str],
             applied = [n for n, c in (("import_paths", c_imp), ("nested_imports", c_nest),
                                       ("address_interface", c_iface)) if c]
             if not applied:  # nothing left to fix deterministically → give up (no redundant recompile)
+                # Say WHY we gave up. Without this the give-up is silent: the log jumps straight from
+                # `scaffold_insufficient` to `scaffold_synthesis_failed`, and there is no way to tell
+                # "no fixer applies to this error" from "a fixer should have applied but did not"
+                # (hit live on GLM-5.2: an off-by-one parent import that _fix_import_paths DOES fix in
+                # isolation still produced zero repair rounds, and the evidence was unrecoverable).
+                log({"event": "scaffold_repair_exhausted", "finding_id": fid, "round": rnd,
+                     "consulted": ["import_paths", "nested_imports", "address_interface"],
+                     "imports": [ln.strip() for ln in code.splitlines()
+                                 if ln.lstrip().startswith("import")][:12]})
                 break
             log({"event": "scaffold_repair", "finding_id": fid, "round": rnd, "fixes": applied})
+        # PRESERVE the rejected base for diagnosis instead of deleting it. Deleting destroyed the only
+        # artifact that explains WHY synthesis gave up (hit live: a repair that should have fired left
+        # nothing to inspect). Renamed to `.rejected` so it is inert — not a `.sol`, so forge never
+        # compiles it and scaffold auto-discovery (which globs *.sol) never picks it up — and it still
+        # lives under the untracked audit area (feature 011 FR-006). Overwritten each run, never grows.
+        rejected = synth_path.with_suffix(synth_path.suffix + ".rejected")
         log({"event": "scaffold_synthesis_failed", "finding_id": fid, "reason": "no_build",
-             "stderr_tail": ((test.stdout + test.stderr)[-600:] if test else "")})
-        synth_path.unlink(missing_ok=True)
+             "stderr_tail": ((test.stdout + test.stderr)[-600:] if test else ""),
+             "rejected_base": str(rejected.relative_to(project))})
+        try:
+            synth_path.replace(rejected)
+        except OSError:            # cannot preserve → fall back to the old behavior, never leave a .sol
+            synth_path.unlink(missing_ok=True)
         return None
     finally:
         smoke.unlink(missing_ok=True)
@@ -2901,12 +2920,17 @@ def main() -> None:
         # idle window. A daemon thread pings /api/tags every 30s so the tunnel never
         # goes idle mid-run. Dies with the process.
         def _keepalive() -> None:
+            failing = False
             while True:
                 time.sleep(30)
                 try:
                     client.available()
-                except Exception:
-                    pass
+                    failing = False
+                except Exception as e:
+                    if not failing:  # surface it ONCE per failure streak (not every 30s) so a
+                                     # persistently-down tunnel/model is visible, not a silent spin
+                        log({"event": "keepalive_failed", "model": client.model, "error": str(e)[:150]})
+                        failing = True
         threading.Thread(target=_keepalive, daemon=True).start()
 
         # Cold-load of a 7b exceeds ready()'s short probe on modest hardware — warm
