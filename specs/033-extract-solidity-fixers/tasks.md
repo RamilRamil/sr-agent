@@ -112,10 +112,12 @@ site inventory is an enforced invariant.
 - [ ] T012 [US1] Verify NO import cycle (SC-009): `python -c "import scripts.solidity_fixers"` and
   `import scripts.solidity_utils` each succeed in isolation; `solidity_fixers` does NOT import
   `poc_queue_runner`.
-- [ ] T013 [P] [US2] Architecture test in `tests/architecture/test_fixer_sites.py` (FR-009): assert the
-  SET of named sequence-functions BY NAME, and that each individual `_fix_*` is called ONLY from inside
-  a named sequence-function (no stray fixer call escapes into a new unpinned site). Keying on the
-  name-set, not line numbers.
+- [ ] T013 [P] [US2] Architecture test in `tests/architecture/test_fixer_sites.py` (FR-009 + SC-002):
+  assert the SET of named sequence-functions BY NAME; that each individual `_fix_*` is called ONLY from
+  inside a named sequence-function (no stray fixer call escapes into a new unpinned site); AND — the
+  SC-002 structural check — that `scripts/poc_queue_runner.py` source contains NO `def _fix_` body (only
+  re-export bindings), so "no fixer logic in pqr" is enforced, not merely "the file got shorter" (a
+  re-export would satisfy shortness without it). Key on the name-set, not line numbers.
 - [ ] T014 Run `pytest -q` — GREEN (characterization now targets `solidity_fixers`; existing `pqr._fix_*`
   tests pass via re-export). **COMMIT 4** (move fixers + arch test).
 
