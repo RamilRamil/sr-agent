@@ -157,6 +157,26 @@ and stay green after the fixers move.
   sequence (same transforms, same order, same per-call args); the loops call these named functions. This
   is behavior-preserving and is NOT unification — each site keeps its OWN separate function and sequence
   (merging them is 034). The characterization tests (FR-005) target these named functions directly.
+- **FR-013 (FOUR commits, each green, each with its guarantee NAMED — not "two")**: the refactor MUST land
+  as an ordered sequence of independently-green commits, because the steps have DIFFERENT guarantees and
+  the riskiest one (extracting two of the harness's largest function bodies) is not covered by the
+  characterization tests it creates:
+  1. **Extract** the five sites into named sequence-functions, gated by FR-014 (loops still run the
+     inline sequence). Guarantee: FR-014 differential test.
+  2. **Swap** the loops to call the named functions; remove the FR-014 differential test. Guarantee: the
+     now-pinning characterization tests + the existing 031/032 loop-event tests.
+  3. **Move** the shared low-level helpers to the utils module (FR-011). Guarantee: existing
+     grounding/`_poc_defects`/symbol-index tests + the characterization tests.
+  4. **Move** the fixers (+ the named sequence-functions) to the fixer module, re-export, add the FR-009
+     architecture test. Guarantee: the characterization tests + the full suite.
+  SC-006's "diff reviewable as a pure no-op" applies PER COMMIT — a single mega-diff mixing all four is
+  NOT reviewable as a no-op and is disallowed.
+- **FR-014 (temporary differential gate for the UNPROTECTED extraction step)**: in commit 1, both the
+  inline sequence and the extracted named function MUST coexist, and a TEMPORARY differential test —
+  authored against the PRE-extraction inline behavior — MUST assert they produce BYTE-IDENTICAL output on
+  the same inputs. It is removed in commit 2 once the loop calls the extracted function. This is exactly
+  the differential check FR-003 rejects for the fixers (redundant there) — but here it is the ONLY thing
+  that gates the extraction, the one step no other test covers.
 
 ### Key Entities *(include if feature involves data)*
 
@@ -164,8 +184,15 @@ and stay green after the fixers move.
 - **Fixer module** (new): the dedicated home for the transforms + their regexes/constants.
 - **Transform-application site** (existing ×5): a place a loop applies a specific sequence of transforms.
   Sequences are unchanged; each is now pinned by a characterization test.
-- **Characterization test** (new): records one site's sequence output over a fixed forge input — the
-  guardrail that makes the future unification safe.
+- **Characterization test** (new): records one named sequence-function's output over a fixed forge input
+  — the guardrail that makes the future unification safe.
+- **Shared low-level utils module** (new, FR-011): the home for helpers the fixers share with grounding/
+  gate/scaffold (`_tracked_sol`, `_SKIP_DIRS`, `_path_for`, `_strip_comments`); imported by both
+  `poc_queue_runner.py` and the fixer module, breaking the would-be import cycle.
+- **Named sequence-function** (new, FR-012): a function per transform-application site applying that
+  site's exact sequence; the loops call it and the characterization tests target it (five in total).
+- **Temporary differential test** (new, FR-014): the commit-1-only oracle asserting each extracted
+  sequence-function is byte-identical to the prior inline behavior; removed in commit 2.
 
 ## Success Criteria *(mandatory)*
 
@@ -186,6 +213,13 @@ and stay green after the fixers move.
   (per-commit history shows tests-first, then the move) — FR-005a.
 - **SC-008**: An architecture test asserts the enumerated set of fixer call sites; adding a site fails it
   until the set is consciously updated (FR-009).
+- **SC-009 (FR-011 acceptance)**: the shared low-level helpers live in the utils module; BOTH
+  `poc_queue_runner.py` and the fixer module import them; there is NO import cycle (verifiable: importing
+  each module in isolation succeeds; a static/import check finds no pqr↔fixer-module cycle).
+- **SC-010 (FR-012/FR-014 acceptance)**: the five named sequence-functions exist and the two loops call
+  them (no inline fixer sequence remains in `synthesize_scaffold`/`_process_finding`); the commit-1
+  differential test was GREEN (byte-identical inline vs extracted) and is removed by commit 2 (per-commit
+  history shows it).
 
 ## Assumptions
 
@@ -211,8 +245,11 @@ and stay green after the fixers move.
   spec **034** (created as a DEFERRED stub, `specs/034-unify-fixer-sequences/`), because it CHANGES
   behavior and needs its own evidence (its proof-question: does giving the drafting in-place step
   `import_paths` actually improve compile-convergence?).
-- Splitting grounding / drafting / falsification / CLI out of the monolith — a later cut; this spec
-  extracts ONLY the deterministic-fixer functions.
+- Splitting grounding / drafting / falsification / CLI out of the monolith — a later cut. (This spec is
+  NOT "only the fixer functions": it also moves the shared low-level helpers to a utils module (FR-011)
+  and edits the two loop bodies to call named sequence-functions (FR-012) — all behavior-preserving, but
+  the diff legitimately touches the fixer layer, the shared helpers, `_poc_defects`'s import, and both
+  loops. The scope boundary is "no LOGIC/sequence change", not "one file".)
 - Changing ANY fixer's logic or adding error classes.
 - The fuzzing/symbolic hybrid (item "b").
 - The fork oracle, `_poc_defects`, `mutation_verify`, the 029 trace feedback, retry/timestamps.
