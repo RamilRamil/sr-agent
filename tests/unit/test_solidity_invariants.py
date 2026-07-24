@@ -147,3 +147,64 @@ def test_setup_failures_are_unavailable_never_verified():
     assert _classify(honest_run=None)[0] == si.UNAVAILABLE
     assert _classify(honest_run={"error": "no scaffold"})[0] == si.UNAVAILABLE
     assert _classify(engine_result={"error": "engine oom"})[0] == si.UNAVAILABLE
+
+
+# ── T010: invariant authoring (FR-001 — tolerance is a REQUIREMENT of the prompt) ──
+class _FakeClient:
+    def __init__(self, reply): self._r = reply; self.seen = None
+    def generate(self, prompt, options=None): self.seen = prompt; return self._r
+
+
+def test_author_invariant_strips_fences_and_returns_source():
+    c = _FakeClient("```solidity\nfunction invariant_x() public { assertLe(gap, TOL); }\n```")
+    out = si.author_invariant(c, finding="F", grounding="G")
+    assert out == "function invariant_x() public { assertLe(gap, TOL); }"
+
+
+def test_author_prompt_demands_tolerance_and_carries_context():
+    """FR-001/FR-020: without a stated tolerance the honest-check cannot separate 'lacked slack'
+    from 'material', so the prompt MUST demand it — the requirement lives in the artifact, not
+    only in the spec."""
+    c = _FakeClient("x")
+    si.author_invariant(c, finding="THE-FINDING", grounding="THE-GROUNDING")
+    assert "TOLERANCE" in c.seen and "rounding" in c.seen
+    assert "THE-FINDING" in c.seen and "THE-GROUNDING" in c.seen
+
+
+# ── T011: harness codegen — one predicate, two policies, senders PINNED (FR-017) ──
+_INV_SRC = "function invariant_nav() public { assertLe(vault.nav(), vault.totalAssets()); }"
+_KW = dict(invariant_src=_INV_SRC, base_import="./Base.t.sol", base_contract="Base",
+           actors=["alice", "bob", "carol"],
+           honest_actions=["deposit", "withdraw"],
+           all_actions=["deposit", "withdraw", "sweep", "setFee"])
+
+
+def test_harness_pins_every_sender_fr017():
+    """FR-017 (blocking): every actor is pinned via targetSender — unpinned fork fuzzing dies on
+    RPC 429 mid-run and the failure presents as a hang."""
+    for policy in (si.HONEST, si.ADVERSARIAL):
+        src = si.build_invariant_harness(policy=policy, **_KW)
+        for actor in _KW["actors"]:
+            assert f"targetSender({actor});" in src
+        assert "targetContract(address(handler));" in src
+
+
+def test_honest_policy_exposes_only_legitimate_actions():
+    """Research Decision 2: the SAME predicate under two actor policies — honest must HOLD."""
+    src = si.build_invariant_harness(policy=si.HONEST, **_KW)
+    assert "act_deposit" in src and "act_withdraw" in src
+    assert "act_sweep" not in src and "act_setFee" not in src
+    assert _INV_SRC in src
+
+
+def test_adversarial_policy_exposes_everything():
+    src = si.build_invariant_harness(policy=si.ADVERSARIAL, **_KW)
+    for a in _KW["all_actions"]:
+        assert f"act_{a}" in src
+    assert _INV_SRC in src
+
+
+def test_unknown_policy_rejected():
+    import pytest
+    with pytest.raises(ValueError):
+        si.build_invariant_harness(policy="whatever", **_KW)

@@ -51,6 +51,20 @@ def _path_for(file_map: str, name: str) -> str:
     return ""
 
 
+def _strip_fences(text: str) -> str:
+    """Drop a leading/trailing markdown fence from a model reply (shared by the PoC drafting
+    path and the invariant-authoring path — feature 035)."""
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        text = "\n".join(lines)
+    return text
+
+
 def _strip_comments(sol: str) -> str:
     sol = re.sub(r"/\*.*?\*/", "", sol, flags=re.DOTALL)
     return re.sub(r"//[^\n]*", "", sol)

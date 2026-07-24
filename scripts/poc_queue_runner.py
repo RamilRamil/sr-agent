@@ -55,7 +55,7 @@ from scripts.patch_reconstruct import ReconstructionRefused, reconstruct
 from scripts.solidity_index import SymbolIndex, expand_referenced_types
 from scripts.solidity_utils import (  # feature 033: shared low-level helpers (see solidity_utils.py)
     POC_SUBDIR, _SCAFFOLD_CONTRACT_RE, _SCAFFOLD_IS_RE, _SKIP_DIRS, _path_for,
-    _scaffold_base_name, _strip_comments, _tracked_sol,
+    _scaffold_base_name, _strip_comments, _strip_fences, _tracked_sol,
 )
 # feature 033: the deterministic compile-fixer layer lives in scripts.solidity_fixers now. The
 # two repair loops call the named sequence-functions (_seq_*), so those + _POSTMODEL_EVENT are the
@@ -451,16 +451,8 @@ def _ident(finding_id: str) -> str:
     return "".join(c if c.isalnum() else "_" for c in finding_id)
 
 
-def _strip_fences(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        text = "\n".join(lines)
-    return text
+# _strip_fences: imported from scripts.solidity_utils (feature 035 — shared with the
+# invariant-authoring path; same boundary rule as feature 033's shared helpers)
 
 
 # Lines whose stripped form starts with one of these anchor the start of real Solidity.
