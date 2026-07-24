@@ -21,6 +21,7 @@ import re
 
 # ── Outcomes (Decision 6) ─────────────────────────────────────────────────────
 VERIFIED = "invariant_verified"                 # all gates passed — the ONLY trustworthy outcome
+HONEST_MANIFEST = "invariant_honest_manifest"   # FR-019: the finding manifests under HONEST use (no adversary)
 OVER_STRICT = "invariant_over_strict"           # FR-013: honest behavior violated the invariant
 WEAK_COVERAGE = "invariant_weak_coverage"       # FR-013a: honest run held but did not cover enough
 NO_VIOLATION = "invariant_no_violation"         # FR-005: engine found nothing / it did not reproduce
@@ -73,6 +74,7 @@ def classify_invariant_result(
     honest_run: dict | None,
     engine_result: dict | None,
     mechanism_matched: bool | None,
+    honest_mechanism_matched: bool | None = None,
 ) -> tuple[str, str, dict]:
     """Apply the gate pipeline in order; return (outcome, reason, provenance).
 
@@ -98,6 +100,17 @@ def classify_invariant_result(
     coverage = honest_run.get("coverage") or {}
     prov["honest_coverage"] = coverage
     if not honest_run.get("held"):
+        # FR-019 (Level-0 row C): a violation during HONEST use is not automatically an over-strict
+        # invariant — for the honest-manifesting class (rounding/accounting drift) the bug IS the
+        # ordinary path, so honest-check and violation-check are the same event. Discriminate, but
+        # SAFE-ERRING: promote only when the honest violation both REPRODUCES and is attributed to the
+        # finding's own mechanism; anything less stays over-strict (the guard is not weakened).
+        # NOTE the coverage bar is deliberately NOT applied here: coverage guards the "held" direction
+        # (absence of evidence proves little); a violation is positive evidence and needs no breadth.
+        prov["honest_violation_call_set"] = honest_run.get("violation_call_set", [])
+        prov["honest_mechanism_matched"] = bool(honest_mechanism_matched)
+        if honest_mechanism_matched and honest_run.get("violation_reproduced"):
+            return HONEST_MANIFEST, "material_violation_under_honest_use", prov
         return OVER_STRICT, "invariant_violated_by_honest_behavior", prov
     if not _meets_coverage_bar(coverage):
         return WEAK_COVERAGE, "honest_run_below_coverage_bar", prov

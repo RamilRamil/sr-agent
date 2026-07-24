@@ -39,11 +39,52 @@ def test_vacuous_invariant_never_verified():
 
 
 def test_over_strict_invariant_rejected_not_verified():
-    """FR-013/SC-007: honest behavior VIOLATED the invariant → over-strict, never verified
-    (even though the engine also 'found' a violation)."""
+    """FR-013/SC-007: honest behavior VIOLATED the invariant, unattributed → over-strict, never
+    verified (even though the engine also 'found' a violation)."""
     honest_broken = {"held": False, "coverage": {"suite_used": True, "actions_exercised": ["withdraw"]}}
     outcome, reason, _ = _classify(honest_run=honest_broken)
     assert outcome == si.OVER_STRICT and reason == "invariant_violated_by_honest_behavior"
+
+
+# ── FR-019 (Level-0 row C): the honest-manifesting class ──────────────────────
+
+def test_honest_manifest_when_violation_reproduces_and_is_attributed():
+    """FR-019: for bugs that manifest in the ORDINARY path (rounding/accounting drift), honest-check
+    and violation-check are the same event. A reproduced, mechanism-attributed honest violation is the
+    FINDING, not an over-strict invariant — its own outcome, no adversary required."""
+    honest_manifest = {"held": False, "violation_reproduced": True,
+                       "violation_call_set": ["deposit"],
+                       "coverage": {"suite_used": False, "actions_exercised": ["deposit"]}}
+    outcome, reason, prov = _classify(honest_run=honest_manifest, honest_mechanism_matched=True)
+    assert outcome == si.HONEST_MANIFEST and reason == "material_violation_under_honest_use"
+    assert prov["honest_violation_call_set"] == ["deposit"]
+
+
+def test_honest_violation_not_reproduced_stays_over_strict():
+    """SAFE-ERRING: mechanism matched but the honest violation did NOT reproduce → over-strict.
+    The over-strict guard is not weakened by FR-019 — promotion needs BOTH signals."""
+    flaky = {"held": False, "violation_reproduced": False, "violation_call_set": ["deposit"],
+             "coverage": {"suite_used": True, "actions_exercised": ["deposit"]}}
+    outcome, _, _ = _classify(honest_run=flaky, honest_mechanism_matched=True)
+    assert outcome == si.OVER_STRICT
+
+
+def test_honest_violation_unattributed_stays_over_strict():
+    """SAFE-ERRING: reproduced but NOT attributed to the finding's mechanism → the invariant is
+    broken by something unrelated → over-strict, never promoted."""
+    unrelated = {"held": False, "violation_reproduced": True, "violation_call_set": ["someOtherPath"],
+                 "coverage": {"suite_used": True, "actions_exercised": ["deposit"]}}
+    outcome, _, _ = _classify(honest_run=unrelated, honest_mechanism_matched=False)
+    assert outcome == si.OVER_STRICT
+
+
+def test_thin_coverage_does_not_block_honest_manifest():
+    """Coverage guards the 'held' direction (absence of evidence), not the 'violated' direction —
+    a violation on the first honest deposit is positive evidence and needs no breadth."""
+    thin = {"held": False, "violation_reproduced": True, "violation_call_set": ["deposit"],
+            "coverage": {"suite_used": False, "actions_exercised": []}}
+    outcome, _, _ = _classify(honest_run=thin, honest_mechanism_matched=True)
+    assert outcome == si.HONEST_MANIFEST
 
 
 def test_weak_coverage_cannot_underwrite_verified():
