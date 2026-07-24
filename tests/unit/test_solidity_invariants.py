@@ -268,3 +268,25 @@ def test_classifier_takes_no_model_verdict_parameter():
     params = set(inspect.signature(si.classify_invariant_result).parameters)
     assert params == {"invariant_src", "honest_run", "engine_result",
                       "mechanism_matched", "honest_mechanism_matched"}
+
+
+# ── Phase E regressions: found by the FIRST live run, not by the fixtures ─────
+def test_no_verdict_is_unavailable_not_over_strict():
+    """A harness that never compiled produces no verdict. That is UNAVAILABILITY, not a judgement
+    about the invariant — reporting `over_strict` would blame the model for an infra failure and
+    silently corrupt the measurement (the live smoke did exactly this)."""
+    dead = si.parse_invariant_output("Compiler run failed:\nError (7576): Undeclared identifier.")
+    assert dead["ran"] is False and dead["held"] is False
+    outcome, reason, _ = _classify(honest_run=dead, honest_mechanism_matched=True)
+    assert outcome == si.UNAVAILABLE and reason == "honest_run_no_verdict"
+
+
+def test_engine_without_a_verdict_is_unavailable():
+    engine_dead = si.parse_invariant_output("Compiler run failed:\n")
+    outcome, reason, _ = _classify(engine_result=engine_dead)
+    assert outcome == si.UNAVAILABLE and reason == "engine_no_verdict"
+
+
+def test_parsed_runs_carry_ran_true():
+    assert si.parse_invariant_output(_PASS_OUT)["ran"] is True
+    assert si.parse_invariant_output(_FAIL_OUT)["ran"] is True

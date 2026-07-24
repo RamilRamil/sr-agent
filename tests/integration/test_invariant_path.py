@@ -42,6 +42,7 @@ def _drive(tmp_path, monkeypatch, *, invariants, forge_script,
     monkeypatch.setattr(pqr, "run_tests", lambda *a, **k: q.pop(0) if q else _PASS)
     # grounded API — the default carries a legitimate entrypoint so derive_actions finds one
     monkeypatch.setattr(pqr, "build_callable_api", lambda *a, **k: callable_api)
+    monkeypatch.setattr(pqr, "read_scaffold", lambda *a, **k: "contract BaseT { function setUp() public {} }")
     monkeypatch.setattr(pqr, "author_invariant",
                         lambda *a, **k: "function invariant_p() public { assertLe(gap, TOL); }")
     events: list[dict] = []
@@ -116,6 +117,7 @@ def test_bounded_calibration_overlap(tmp_path, monkeypatch):
     monkeypatch.setattr(pqr, "draft", lambda *a, **k: REAL)
     monkeypatch.setattr(pqr, "run_tests", lambda *a, **k: q.pop(0) if q else _PASS)
     monkeypatch.setattr(pqr, "build_callable_api", lambda *a, **k: "function redeem(uint256) external")
+    monkeypatch.setattr(pqr, "read_scaffold", lambda *a, **k: "contract BaseT { function setUp() public {} }")
     monkeypatch.setattr(pqr, "author_invariant", lambda *a, **k: "function invariant_p() public { assertLe(g, T); }")
     monkeypatch.setattr(pqr, "mutation_verify", lambda *a, **k: ("verified", ""))
     # structurally-real PoC (the vacuity gate is not what this test is about) so the assertion

@@ -172,6 +172,11 @@ def parse_invariant_output(stdout: str) -> dict:
     mag = _INV_MAGNITUDE_RE.search(text)
     actions = list(dict.fromkeys(_INV_ACTION_RE.findall(text)))
     return {
+        # `ran` distinguishes "the engine produced a verdict" from "nothing ran" (a compile/setup
+        # failure). Without it a non-compiling harness reads as `held=False` and lands in the
+        # honest-violation branch — reporting `over_strict`, a substantive judgement ABOUT THE
+        # INVARIANT, for what is really an infrastructure failure (found by the first live run).
+        "ran": bool(m),
         "held": held,
         "violation_found": violation,
         "call_set": actions,
@@ -261,6 +266,11 @@ def classify_invariant_result(
     # 2 — honest-behavior check (FR-013) + coverage bar (FR-013a) — restores INDEPENDENCE
     if not honest_run or honest_run.get("error"):
         return UNAVAILABLE, "honest_run_setup_failed", prov
+    # A run that produced NO verdict never exercised the invariant — that is unavailability, not a
+    # statement about the invariant. Only the parser sets `ran` False, so scripted fixtures that
+    # state a verdict directly are unaffected.
+    if honest_run.get("ran", True) is False:
+        return UNAVAILABLE, "honest_run_no_verdict", prov
     coverage = honest_run.get("coverage") or {}
     prov["honest_coverage"] = coverage
     if not honest_run.get("held"):
@@ -290,6 +300,8 @@ def classify_invariant_result(
     # 3 — engine search + deterministic re-confirm (FR-002/003/005)
     if not engine_result or engine_result.get("error"):
         return UNAVAILABLE, "engine_setup_failed", prov
+    if engine_result.get("ran", True) is False:
+        return UNAVAILABLE, "engine_no_verdict", prov
     if not engine_result.get("violation_found"):
         return NO_VIOLATION, "engine_found_no_violation", prov
     ce = engine_result.get("counterexample") or {}

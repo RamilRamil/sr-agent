@@ -2294,7 +2294,14 @@ def _run_invariant_path(task, *, args, client, sandbox, log, scaffold, poc_dir, 
     accumulation by re-running the honest policy at a larger budget, then hands everything to the
     deterministic classifier. Emits one `invariant_result` event (FR-007). Returns the outcome."""
     fid = task["id"]
-    base = _scaffold_base_name(scaffold) or "Test"
+    # Without a real scaffold base there is nothing to inherit, so the generated harness could only
+    # name a contract that does not exist — a guaranteed compile failure dressed up as a result.
+    # Refuse the path instead (mirrors the no-honest-entrypoints guard). Found by the first live run.
+    base = _scaffold_base_name(scaffold)
+    if not base:
+        log({"event": "invariant_result", "finding_id": fid,
+             "outcome": "invariant_unavailable", "reason": "no_scaffold_base"})
+        return "invariant_unavailable"
     try:
         inv = _call_with_retry(
             lambda: author_invariant(client, finding=task.get("description", ""), grounding=grounding),
