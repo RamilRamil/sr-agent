@@ -2294,10 +2294,26 @@ def _run_invariant_path(task, *, args, client, sandbox, log, scaffold, poc_dir, 
     accumulation by re-running the honest policy at a larger budget, then hands everything to the
     deterministic classifier. Emits one `invariant_result` event (FR-007). Returns the outcome."""
     fid = task["id"]
-    # Without a real scaffold base there is nothing to inherit, so the generated harness could only
-    # name a contract that does not exist — a guaranteed compile failure dressed up as a result.
-    # Refuse the path instead (mirrors the no-honest-entrypoints guard). Found by the first live run.
-    base = _scaffold_base_name(scaffold)
+    # The harness base: an OPERATOR-supplied file wins over the per-finding drafting scaffold, which
+    # is frequently absent/insufficient on real targets (measured: scaffold synthesis succeeded once
+    # in sixteen). Guessing it yields a harness naming a contract that does not exist — a compile
+    # failure dressed up as a result. Refuse rather than emit one (found by the first live run).
+    base, base_import = _scaffold_base_name(scaffold), None
+    base_rel = getattr(args, "invariant_base", "")
+    if base_rel:
+        # `PATH:Contract` — the CONTRACT is named explicitly too, because leaf-inference picks the
+        # last declared contract, and a real base file also declares handlers/predicates beside the
+        # base (measured on the Level-0 harness: inference returned a handler, not the base).
+        rel, _, named = base_rel.partition(":")
+        base_path = args.project / rel
+        try:
+            base = named or _scaffold_base_name(base_path.read_text(encoding="utf-8"))
+            base_import = "./" + os.path.relpath(base_path, poc_dir)
+        except OSError as e:
+            log({"event": "invariant_result", "finding_id": fid,
+                 "outcome": "invariant_unavailable", "reason": "invariant_base_unreadable",
+                 "error": str(e)[:150]})
+            return "invariant_unavailable"
     if not base:
         log({"event": "invariant_result", "finding_id": fid,
              "outcome": "invariant_unavailable", "reason": "no_scaffold_base"})
@@ -2311,7 +2327,7 @@ def _run_invariant_path(task, *, args, client, sandbox, log, scaffold, poc_dir, 
              "reason": "authoring_failed", "error": str(e)[:200]})
         return "invariant_unavailable"
 
-    common = dict(invariant_src=inv, base_import=f"./{base}.t.sol", base_contract=base,
+    common = dict(invariant_src=inv, base_import=base_import or f"./{base}.t.sol", base_contract=base,
                   actors=INVARIANT_ACTORS, honest_actions=honest_actions, all_actions=all_actions)
     runner = dict(project=args.project, sandbox=sandbox, poc_dir=poc_dir,
                   fork_rpc=fork_rpc, image=args.image)
@@ -2785,6 +2801,13 @@ def main() -> None:
                          "this keeps the honest-experiment behavior (insufficient scaffold, "
                          "no synthesized infra). Synthesis is ON by default (fires only on "
                          "detected insufficiency, always falls back honestly).")
+    ap.add_argument("--invariant-base", default="", metavar="PATH[:Contract]",
+                    help="feature 035: project-relative path to the Solidity file the generated invariant "
+                         "harness INHERITS, optionally with the exact contract name after a colon (e.g. "
+                         "'audit/level0/Level0Base.sol:Level0Base'). The base is an OPERATOR input, not "
+                         "inferred: the per-finding drafting scaffold is often absent or insufficient, and "
+                         "a real base file declares handlers beside the base, so leaf-inference picks the "
+                         "wrong contract. Falls back to the drafting scaffold when unset.")
     ap.add_argument("--invariants", action="store_true",
                     help="feature 035: after the assertion path, run the PROPERTY/INVARIANT verification "
                          "path for findings it did not verify (the oracle is the invariant violation, so "

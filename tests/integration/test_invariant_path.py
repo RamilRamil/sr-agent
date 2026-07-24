@@ -134,3 +134,29 @@ def test_bounded_calibration_overlap(tmp_path, monkeypatch):
     assert len(cal) == 1 and "agree" in cal[0]
     assert cal[0]["invariant_verdict"] == "invariant_verified"
     assert args.invariant_overlap_left == 0        # budget consumed, never unbounded
+
+
+def test_operator_supplied_invariant_base_is_used(tmp_path, monkeypatch):
+    """Phase E: the harness base is an OPERATOR input. The per-finding drafting scaffold is often
+    absent on real targets, and guessing it emits a harness naming a contract that does not exist."""
+    base_dir = tmp_path / "audit" / "level0"
+    base_dir.mkdir(parents=True)
+    (base_dir / "MyBase.sol").write_text("contract MyBase { function setUp() public virtual {} }")
+    seen = {}
+    real_build = pqr.build_invariant_harness
+    monkeypatch.setattr(pqr, "build_invariant_harness",
+                        lambda **kw: seen.update(kw) or real_build(**kw))
+    args = _args(tmp_path, invariants=True)
+    args.invariant_base = "audit/level0/MyBase.sol:MyBase"   # explicit contract, never inferred
+    monkeypatch.setattr(pqr, "read_scaffold", lambda *a, **k: "")     # no drafting scaffold at all
+    monkeypatch.setattr(pqr, "draft", lambda *a, **k: REAL)
+    monkeypatch.setattr(pqr, "run_tests", lambda *a, **k: _PASS)
+    monkeypatch.setattr(pqr, "build_callable_api", lambda *a, **k: "function redeem(uint256) external")
+    monkeypatch.setattr(pqr, "author_invariant", lambda *a, **k: "function invariant_p() public {}")
+    (tmp_path / "audit" / "poc").mkdir(parents=True, exist_ok=True)
+    pqr._process_finding(TASK, args=args, client=object(), sandbox=object(), log=[].append,
+                         symbol_index=None, file_map="", protocol_mode="marker", fork_rpc=None,
+                         require_pass_effective=False, poc_dir=tmp_path / "audit" / "poc",
+                         tracer=NOOP_TRACER)
+    assert seen["base_contract"] == "MyBase"
+    assert seen["base_import"].endswith("level0/MyBase.sol")
