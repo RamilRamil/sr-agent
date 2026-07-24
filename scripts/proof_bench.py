@@ -107,10 +107,12 @@ class CaseOutcome:
     stage: str
     outcome: str          # the harness's task_done outcome, or "" for an off-ladder death
     verify_reason: str = ""
+    invariant_outcome: str = ""   # feature 035: the SECOND oracle's verdict, never merged above
 
     def to_dict(self) -> dict:
         return {"case_id": self.case_id, "run_idx": self.run_idx, "stage": self.stage,
-                "outcome": self.outcome, "verify_reason": self.verify_reason}
+                "outcome": self.outcome, "verify_reason": self.verify_reason,
+                "invariant_outcome": self.invariant_outcome}
 
 
 @dataclass(frozen=True)
@@ -141,15 +143,69 @@ class Funnel:
                 "off_ladder": self.off_ladder}
 
 
+# ── feature 035: the SECOND oracle, kept on its own axis (FR-008/SC-008) ──────
+# The invariant oracle is intrinsic (a model-written property validated by deterministic gates),
+# the assertion oracle is grounded in the report's own fix. Different epistemic strength, so they
+# never share a number: `interval` above stays ASSERTION-only and comparable to every prior run.
+INVARIANT_TRUSTWORTHY = ("invariant_verified", "invariant_honest_manifest")
+
+# FR-015: the calibration threshold is DECLARED HERE, IN ADVANCE — never fitted after seeing the
+# number. Direction that matters: the invariant oracle says verified where the fix oracle (independent
+# ground truth) says NOT — i.e. the new oracle is too LAX. Set to 0.0: the new oracle's entire claim is
+# trustworthiness, so a single such case on the overlap declares it uncalibrated. Loosening this is a
+# deliberate decision to record, not an adjustment to make once a run disappoints.
+CALIBRATION_MAX_LAX_RATE = 0.0
+
+
+@dataclass(frozen=True)
+class InvariantAxis:
+    """Feature 035 — the invariant oracle's own axis, with its DENOMINATOR disclosed (SC-002c)."""
+    verified: int             # invariant_verified
+    honest_manifest: int      # invariant_honest_manifest (the bug on the ordinary path)
+    trials: int               # case-runs the invariant path actually ran on
+    interval: Interval
+    selection_rule: str       # WHY these and not the rest — a curated subset is not a random sample
+    full_set_trials: int      # every case-run, including those the subset excluded
+    full_set_floor: int       # trustworthy invariant results counted against the FULL set
+
+    def to_dict(self) -> dict:
+        return {"verified": self.verified, "honest_manifest": self.honest_manifest,
+                "trials": self.trials, "interval": self.interval.to_dict(),
+                "selection_rule": self.selection_rule, "full_set_trials": self.full_set_trials,
+                "full_set_floor": self.full_set_floor}
+
+
+@dataclass(frozen=True)
+class Calibration:
+    """FR-015/SC-009 — do the two oracles AGREE where independent ground truth exists?"""
+    pairs: int
+    agree: int
+    lax_disagreements: int    # invariant says verified, the fix oracle says NOT
+    threshold: float
+    uncalibrated: bool
+
+    def to_dict(self) -> dict:
+        return {"pairs": self.pairs, "agree": self.agree,
+                "lax_disagreements": self.lax_disagreements, "threshold": self.threshold,
+                "uncalibrated": self.uncalibrated}
+
+
 @dataclass(frozen=True)
 class Report:
     interval: Interval
     funnel: Funnel
     config: RunConfig
+    invariant: InvariantAxis | None = None
+    calibration: Calibration | None = None
 
     def to_dict(self) -> dict:
-        return {"interval": self.interval.to_dict(), "funnel": self.funnel.to_dict(),
-                "config": self.config.to_dict()}
+        d = {"interval": self.interval.to_dict(), "funnel": self.funnel.to_dict(),
+             "config": self.config.to_dict()}
+        if self.invariant:
+            d["invariant_axis"] = self.invariant.to_dict()
+        if self.calibration:
+            d["calibration"] = self.calibration.to_dict()
+        return d
 
 
 # ── external-only loading (mirrors bench.py exactly) ──────────────────────────
@@ -385,7 +441,8 @@ def build_funnel(outcomes: list[CaseOutcome]) -> Funnel:
 
 # ── scoring: assemble the report (US3 — counts exactly passed_verified) ───────
 
-def score(outcomes: list[CaseOutcome], config: RunConfig) -> Report:
+def score(outcomes: list[CaseOutcome], config: RunConfig,
+          calibration_pairs: list[dict] | None = None) -> Report:
     """Pure. Verified successes = case-runs whose outcome is EXACTLY `passed_verified` — nothing
     inferred, nothing model-judged (FR-007). Trials = all case-runs (every case is fix-bearing, so
     the denominator is exactly the loaded cases × N — there is no lead/fix-less case to exclude)."""
@@ -395,7 +452,51 @@ def score(outcomes: list[CaseOutcome], config: RunConfig) -> Report:
         interval=credible_interval(successes, trials),
         funnel=build_funnel(outcomes),
         config=config,
+        invariant=build_invariant_axis(outcomes),
+        calibration=build_calibration(calibration_pairs or []),
     )
+
+
+def build_invariant_axis(outcomes: list[CaseOutcome],
+                         selection_rule: str = "class-aware curated subset (FR-018)"
+                         ) -> InvariantAxis | None:
+    """Feature 035 T015 — the invariant oracle's own axis. Returns None when the path never ran, so
+    a run without `--invariants` reports exactly as before.
+
+    SC-002(c): the denominator is DISCLOSED. The subset is curated by PREDICTED survivability, so its
+    share and the all-cases baseline are quantities of different nature; publishing the subset share
+    alone would make method gain and selection effect indistinguishable. The axis therefore always
+    carries the subset size, the selection rule, AND the consequence for the FULL set — trustworthy
+    invariant results counted against EVERY case-run, with the excluded ones counted as unverified."""
+    ran = [o for o in outcomes if o.invariant_outcome]
+    if not ran:
+        return None
+    verified = sum(1 for o in ran if o.invariant_outcome == "invariant_verified")
+    manifest = sum(1 for o in ran if o.invariant_outcome == "invariant_honest_manifest")
+    trustworthy = verified + manifest
+    return InvariantAxis(
+        verified=verified, honest_manifest=manifest, trials=len(ran),
+        interval=credible_interval(trustworthy, len(ran)),
+        selection_rule=selection_rule,
+        full_set_trials=len(outcomes),
+        full_set_floor=trustworthy,     # the excluded count as unverified — never re-based away
+    )
+
+
+def build_calibration(pairs: list[dict]) -> Calibration | None:
+    """Feature 035 T016 / FR-015 — the calibration verdict over the bounded overlap, judged against
+    the threshold declared ABOVE (never fitted afterwards). Each pair is one
+    `oracle_calibration` event: {assertion_verdict, invariant_verdict, agree}."""
+    if not pairs:
+        return None
+    agree = sum(1 for p in pairs if p.get("agree"))
+    lax = sum(1 for p in pairs
+              if p.get("invariant_verdict") in INVARIANT_TRUSTWORTHY
+              and p.get("assertion_verdict") != "passed_verified")
+    rate = lax / len(pairs)
+    return Calibration(pairs=len(pairs), agree=agree, lax_disagreements=lax,
+                       threshold=CALIBRATION_MAX_LAX_RATE,
+                       uncalibrated=rate > CALIBRATION_MAX_LAX_RATE)
 
 
 # ── the harness seam — the SOLE impure/expensive function (Decision 1) ────────
@@ -459,6 +560,9 @@ def run_case(case: Case, config: RunConfig, *, image: str | None = None, fork: b
             outcomes.append(CaseOutcome(
                 case_id=case.case_id, run_idx=run_idx, stage=stage,
                 outcome=str(done.get("outcome", "")), verify_reason=str(done.get("verify_reason", "")),
+                # feature 035: the second oracle's verdict, carried on its OWN field so it can never
+                # be mistaken for (or merged into) the assertion outcome the headline counts.
+                invariant_outcome=str(done.get("invariant_outcome", "")),
             ))
     finally:
         Path(task_path).unlink(missing_ok=True)   # ephemeral target-material scratch, always removed
@@ -505,6 +609,31 @@ def render(report: Report) -> str:
     for bucket, ids in fn.off_ladder.items():
         if ids:
             lines.append(f"  [{bucket}] {', '.join(ids)}")
+    # feature 035 — the SECOND oracle, on its own labelled axis. Never folded into the number above:
+    # that one is grounded in the report's own fix, this one in a model-written property. Reporting
+    # them as one figure would make a method gain and a weaker oracle indistinguishable (SC-008).
+    if report.invariant:
+        ia = report.invariant
+        lines += [
+            "",
+            "INVARIANT AXIS (SEPARATE ORACLE — weaker independence; do NOT add to the number above):",
+            f"  trustworthy {ia.verified + ia.honest_manifest}/{ia.trials} case-runs on the subset "
+            f"(verified {ia.verified}, honest-manifest {ia.honest_manifest})",
+            f"  → {int(ia.interval.mass*100)}% interval [{ia.interval.lo:.3f}, {ia.interval.hi:.3f}]",
+            f"  SUBSET: {ia.trials} of {ia.full_set_trials} case-runs — selection rule: {ia.selection_rule}",
+            f"  FULL-SET CONSEQUENCE: >= {ia.full_set_floor}/{ia.full_set_trials} "
+            f"(every excluded case-run counted as UNVERIFIED — the subset share alone is not a result)",
+        ]
+    if report.calibration:
+        c = report.calibration
+        verdict = "UNCALIBRATED — invariant verdicts NOT trustworthy this run" if c.uncalibrated \
+            else "within the pre-declared threshold"
+        lines += [
+            "",
+            f"ORACLE CALIBRATION (overlap where independent ground truth exists): {c.agree}/{c.pairs} agree",
+            f"  invariant-too-lax disagreements: {c.lax_disagreements} "
+            f"(threshold declared in advance: {c.threshold}) → {verdict}",
+        ]
     lines += ["", _DEV_CAVEAT]
     return "\n".join(lines)
 

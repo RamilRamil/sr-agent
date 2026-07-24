@@ -314,3 +314,67 @@ def test_render_states_n_width_and_dev_caveat():
     text = pb.render(r)
     assert "N=3" in text and "width" in text.lower()
     assert "DEV SET" in text and "NOT absolute capability" in text
+
+
+# ── Feature 035 T015/T016: the invariant axis + the calibration verdict ───────
+def _co(cid, outcome, inv=""):
+    return pb.CaseOutcome(case_id=cid, run_idx=0,
+                          stage="verified" if outcome == "passed_verified" else "compiled",
+                          outcome=outcome, invariant_outcome=inv)
+
+
+_CFG = pb.RunConfig(case_set_id="s", provider="p", model="m", scaffold="", example="",
+                    settings={}, n=1, harness_version="v")
+
+
+def test_headline_stays_assertion_only(  ):
+    """SC-008: invariant results NEVER enter the headline interval — it must stay comparable to
+    every prior run, which counted exactly passed_verified."""
+    outs = [_co("a", "exhausted", "invariant_verified"),
+            _co("b", "exhausted", "invariant_honest_manifest"),
+            _co("c", "passed_verified")]
+    rep = pb.score(outs, _CFG)
+    assert rep.interval.successes == 1        # only the assertion-verified one
+    assert rep.invariant.verified == 1 and rep.invariant.honest_manifest == 1
+
+
+def test_invariant_axis_discloses_denominator_and_full_set_floor():
+    """SC-002(c): the subset share alone must never stand — size, selection rule and the
+    consequence for the FULL set (excluded counted as unverified) travel with it."""
+    outs = [_co("a", "exhausted", "invariant_verified"),
+            _co("b", "exhausted", ""),          # invariant path did not run → outside the subset
+            _co("c", "exhausted", "")]
+    ia = pb.score(outs, _CFG).invariant
+    assert ia.trials == 1 and ia.full_set_trials == 3
+    assert ia.full_set_floor == 1 and ia.selection_rule
+
+
+def test_no_invariant_runs_reports_exactly_as_before():
+    """A run without --invariants is byte-identical in shape: no axis, no calibration."""
+    rep = pb.score([_co("a", "passed_verified")], _CFG)
+    assert rep.invariant is None and rep.calibration is None
+    assert "invariant_axis" not in rep.to_dict()
+
+
+def test_calibration_flags_uncalibrated_on_a_lax_disagreement():
+    """FR-015/SC-009: the invariant oracle claiming verified where independent ground truth says NOT
+    is the direction that matters; the threshold is the module constant, declared in advance."""
+    pairs = [{"assertion_verdict": "passed_verified", "invariant_verdict": "invariant_verified", "agree": True},
+             {"assertion_verdict": "exhausted", "invariant_verdict": "invariant_verified", "agree": False}]
+    rep = pb.score([_co("a", "exhausted", "invariant_verified")], _CFG, calibration_pairs=pairs)
+    assert rep.calibration.lax_disagreements == 1
+    assert rep.calibration.threshold == pb.CALIBRATION_MAX_LAX_RATE
+    assert rep.calibration.uncalibrated is True
+
+
+def test_calibration_agreement_is_not_flagged():
+    pairs = [{"assertion_verdict": "passed_verified", "invariant_verdict": "invariant_verified", "agree": True}]
+    rep = pb.score([_co("a", "passed_verified", "invariant_verified")], _CFG, calibration_pairs=pairs)
+    assert rep.calibration.uncalibrated is False and rep.calibration.agree == 1
+
+
+def test_render_labels_the_axis_as_a_separate_oracle():
+    outs = [_co("a", "exhausted", "invariant_verified"), _co("b", "passed_verified")]
+    text = pb.render(pb.score(outs, _CFG))
+    assert "SEPARATE ORACLE" in text and "do NOT add" in text
+    assert "FULL-SET CONSEQUENCE" in text
