@@ -55,6 +55,22 @@ def _is_vacuous(invariant_src: str) -> bool:
     return bool(re.search(r"\breturn\s+true\s*;", body, re.IGNORECASE))
 
 
+def _is_material(honest_run: dict) -> bool:
+    """FR-020 — MODEL-INDEPENDENT materiality for the FR-019 branch.
+
+    Reproduction and attribution both fire for a merely OVER-STRICT invariant in exactly the
+    class FR-019 targets: rounding is deterministic (so it reproduces every time) and the honest
+    scenario calls the very functions the finding names (so attribution matches). The only signal
+    the model does NOT author is how the discrepancy BEHAVES: a rounding artifact stays bounded
+    (~1 wei) under repetition, while a real leak GROWS with the number of operations / scale.
+    So materiality = the gap accumulates, or it exceeds an externally-supplied threshold.
+    Absent either measurement, materiality is FALSE (safe-erring)."""
+    if honest_run.get("magnitude_grows"):
+        return True
+    mag, thr = honest_run.get("magnitude"), honest_run.get("materiality_threshold")
+    return mag is not None and thr is not None and mag > thr
+
+
 def _meets_coverage_bar(coverage: dict | None) -> bool:
     """FR-013a: the honest run covers enough to make `held` meaningful. Met when the target's own
     suite ran (`suite_used`), OR the honest run exercised at least one real state-changing path
@@ -109,7 +125,15 @@ def classify_invariant_result(
         # (absence of evidence proves little); a violation is positive evidence and needs no breadth.
         prov["honest_violation_call_set"] = honest_run.get("violation_call_set", [])
         prov["honest_mechanism_matched"] = bool(honest_mechanism_matched)
-        if honest_mechanism_matched and honest_run.get("violation_reproduced"):
+        # Magnitude is recorded ALWAYS (SC-013), so a reviewer tells 1 wei from a real loss
+        # without rerunning — the analogue of SC-010's coverage provenance.
+        prov["violation_magnitude"] = honest_run.get("magnitude")
+        prov["magnitude_grows"] = honest_run.get("magnitude_grows")
+        material = _is_material(honest_run)
+        prov["material"] = material
+        # THREE signals required (FR-019 + FR-020). Reproduction and attribution alone do NOT
+        # discriminate here: both also fire for an invariant that merely lacked slack.
+        if honest_mechanism_matched and honest_run.get("violation_reproduced") and material:
             return HONEST_MANIFEST, "material_violation_under_honest_use", prov
         return OVER_STRICT, "invariant_violated_by_honest_behavior", prov
     if not _meets_coverage_bar(coverage):
