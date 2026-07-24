@@ -208,3 +208,38 @@ def test_unknown_policy_rejected():
     import pytest
     with pytest.raises(ValueError):
         si.build_invariant_harness(policy="whatever", **_KW)
+
+
+# ── T012 (pure half): forge-output parsing + accumulation, synthetic fixtures ──
+_PASS_OUT = ("[PASS] invariant_nav() (runs: 100, calls: 10000, reverts: 12)\n"
+             "  act_deposit(uint256)\n  act_withdraw(uint256)\n")
+_FAIL_OUT = ("[FAIL: assertion failed] invariant_nav() (runs: 3, calls: 7, reverts: 0)\n"
+             "Failing sequence:\n  calldata=act_redeem(uint256), args=[5]\n  gap=42\n")
+
+
+def test_parse_pass_run_yields_held_and_coverage():
+    got = si.parse_invariant_output(_PASS_OUT)
+    assert got["held"] is True and got["violation_found"] is False
+    assert got["coverage"]["actions_exercised"] == ["deposit", "withdraw"]
+    assert got["runs"] == 100 and got["calls"] == 10000
+
+
+def test_parse_fail_run_yields_violation_callset_and_magnitude():
+    got = si.parse_invariant_output(_FAIL_OUT)
+    assert got["violation_found"] is True and got["held"] is False
+    assert got["call_set"] == ["redeem"] and got["magnitude"] == 42
+
+
+def test_unparseable_run_is_not_held():
+    """SAFE-ERRING: no verdict must never read as 'the invariant holds'."""
+    for junk in ["", "compilation failed", "Error: something exploded"]:
+        got = si.parse_invariant_output(junk)
+        assert got["held"] is False and got["violation_found"] is False
+
+
+def test_accumulation_signal():
+    """FR-020: growth across budgets = material; bounded or unknown = not."""
+    assert si.accumulates(1, 9000) is True
+    assert si.accumulates(1, 1) is False      # bounded rounding artifact
+    assert si.accumulates(None, 9000) is False
+    assert si.accumulates(5, None) is False

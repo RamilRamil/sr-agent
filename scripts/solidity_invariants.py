@@ -148,6 +148,61 @@ contract Invariant_{policy} is {base_contract} {{
 """
 
 
+# ── T012 (pure half): parse a forge invariant run into the classifier's inputs ──
+# Kept here, not in the runner, so every parsing rule is offline-testable against synthetic
+# forge-shaped fixtures (no sandbox, no target material).
+_INV_VERDICT_RE = re.compile(r"\[(PASS|FAIL[^\]]*)\]\s+(invariant_\w+)", re.I)
+_INV_STATS_RE = re.compile(r"runs:\s*(\d+),\s*calls:\s*(\d+),\s*reverts:\s*(\d+)", re.I)
+_INV_ACTION_RE = re.compile(r"\bact_(\w+)\b")
+_INV_MAGNITUDE_RE = re.compile(r"\bgap[=:\s]+(\d+)\b", re.I)
+
+
+def parse_invariant_output(stdout: str) -> dict:
+    """Turn a forge invariant run's stdout into structured facts.
+
+    Returns `{held, violation_found, call_set, magnitude, coverage:{actions_exercised, suite_used}}`.
+    `held` is True only on an explicit PASS — an unparseable or empty run is NOT treated as held
+    (safe-erring: absence of a verdict must never read as "the invariant holds")."""
+    text = stdout or ""
+    m = _INV_VERDICT_RE.search(text)
+    verdict = (m.group(1).upper() if m else "")
+    held = verdict.startswith("PASS")
+    violation = verdict.startswith("FAIL")
+    stats = _INV_STATS_RE.search(text)
+    mag = _INV_MAGNITUDE_RE.search(text)
+    actions = list(dict.fromkeys(_INV_ACTION_RE.findall(text)))
+    return {
+        "held": held,
+        "violation_found": violation,
+        "call_set": actions,
+        "magnitude": int(mag.group(1)) if mag else None,
+        "runs": int(stats.group(1)) if stats else None,
+        "calls": int(stats.group(2)) if stats else None,
+        "coverage": {"actions_exercised": actions, "suite_used": False},
+    }
+
+
+def accumulates(magnitude_small: int | None, magnitude_large: int | None) -> bool:
+    """FR-020 materiality by ACCUMULATION: the same honest policy run at a larger call budget.
+    A rounding artifact stays bounded; a real leak grows with the number of operations. Unknown
+    on either side → False (never promote on ignorance)."""
+    if magnitude_small is None or magnitude_large is None:
+        return False
+    return magnitude_large > magnitude_small
+
+
+def derive_actions(callable_api: str) -> tuple[list[str], list[str]]:
+    """Split the grounded callable API into (honest_actions, all_actions) for the two handler
+    policies. `honest` keeps only recognised LEGITIMATE user entrypoints — the actions a normal
+    user performs — so the honest policy exercises real protocol paths (FR-013a) without an
+    adversary; `all` is everything the API exposes, for the adversarial policy. Deriving `honest`
+    from a fixed vocabulary (rather than from the model) keeps the honest side model-independent,
+    which is what makes the honest-check an independent oracle at all (FR-013)."""
+    names = list(dict.fromkeys(re.findall(r"\bfunction\s+(\w+)\s*\(", callable_api or "")))
+    honest = [n for n in names if n.lower() in _STATE_CHANGING]
+    return honest, names
+
+
 def _is_material(honest_run: dict) -> bool:
     """FR-020 — MODEL-INDEPENDENT materiality for the FR-019 branch.
 

@@ -65,6 +65,25 @@ from scripts.solidity_utils import (  # feature 033: shared low-level helpers (s
 from scripts.solidity_fixers import (
     _POSTMODEL_EVENT, _seq_draft_inplace, _seq_postmodel, _seq_synth_prewrite, _seq_synth_repair,
 )
+from scripts.solidity_invariants import (  # feature 035: the invariant verification path
+    ADVERSARIAL, HONEST, accumulates, author_invariant, build_invariant_harness,
+    classify_invariant_result, derive_actions, parse_invariant_output,
+)
+
+# Feature 035 — bounded invariant search. Level-0 measured reproduction as BIMODAL (a violation
+# surfaces in seconds or not within 40 000 calls), so the budget is sized for the "found fast"
+# fraction rather than a mean. The honest policy is additionally run at a LARGER budget so
+# FR-020's accumulation signal can be measured (a rounding artifact stays bounded; a leak grows).
+INVARIANT_RUNS = 100
+INVARIANT_DEPTH = 100
+INVARIANT_ACCUM_FACTOR = 4
+INVARIANT_OVERLAP_CAP = 3          # FR-010b: calibration overlap is a FEW findings, never all
+# FR-017 (blocking): senders MUST be pinned — random per-call senders are uncacheable on a fork
+# and trip the provider's rate limit mid-run, which presents as a hang.
+INVARIANT_ACTORS = ["address(0xA11CE)", "address(0xB0B)", "address(0xCA401)"]
+# The two TRUSTWORTHY invariant outcomes (adversarial exploit, and the bug on the ordinary path).
+# Kept on their own axis — never merged into the assertion headline (FR-008).
+INVARIANT_TRUSTWORTHY = frozenset({"invariant_verified", "invariant_honest_manifest"})
 
 # Any model-transport failure — local (Ollama) OR hosted (Gemini/OpenRouter). The
 # harness catches these at every model-call site so a hosted 404/503/quota surfaces
@@ -2246,6 +2265,90 @@ def fix(client: GenClient, task: dict, previous: str, error: str,
     )
 
 
+def _run_one_invariant(policy, *, harness_src, project, sandbox, poc_dir, runs, depth,
+                       fork_rpc=None, image=None) -> dict:
+    """Write ONE policy's harness and run it; return the parsed facts (or an error marker).
+    Infra failure is an honest `error`, never a silent pass (FR-005)."""
+    path = poc_dir / f"_invariant_{policy}.t.sol"
+    path.write_text(harness_src, encoding="utf-8")
+    try:
+        res = run_tests(
+            project, sandbox, test_path=str(path.relative_to(project)),
+            foundry_test_dir=POC_SUBDIR,
+            timeout_s=RUN_TIMEOUT_S * 2 if fork_rpc else RUN_TIMEOUT_S,
+            fork_rpc=fork_rpc, **({"image": image} if image else {}),
+        )
+    except Exception as e:
+        return {"error": str(e)[:200]}
+    out = parse_invariant_output(res.stdout + "\n" + res.stderr)
+    out["runs_budget"], out["depth_budget"] = runs, depth
+    return out
+
+
+def _run_invariant_path(task, *, args, client, sandbox, log, scaffold, poc_dir, grounding,
+                        honest_actions, all_actions, fork_rpc=None) -> str:
+    """Feature 035 Phase C (T012/T013) — the invariant verification path for ONE finding.
+
+    Authors the invariant (untrusted `external_llm_output`), builds the SAME predicate under two
+    actor policies (honest must HOLD, adversarial may break), runs them bounded, measures FR-020
+    accumulation by re-running the honest policy at a larger budget, then hands everything to the
+    deterministic classifier. Emits one `invariant_result` event (FR-007). Returns the outcome."""
+    fid = task["id"]
+    base = _scaffold_base_name(scaffold) or "Test"
+    try:
+        inv = _call_with_retry(
+            lambda: author_invariant(client, finding=task.get("description", ""), grounding=grounding),
+            log=log, stage="invariant", fid=fid)
+    except MODEL_ERRORS as e:
+        log({"event": "invariant_result", "finding_id": fid, "outcome": "invariant_unavailable",
+             "reason": "authoring_failed", "error": str(e)[:200]})
+        return "invariant_unavailable"
+
+    common = dict(invariant_src=inv, base_import=f"./{base}.t.sol", base_contract=base,
+                  actors=INVARIANT_ACTORS, honest_actions=honest_actions, all_actions=all_actions)
+    runner = dict(project=args.project, sandbox=sandbox, poc_dir=poc_dir,
+                  fork_rpc=fork_rpc, image=args.image)
+
+    honest = _run_one_invariant(HONEST, harness_src=build_invariant_harness(policy=HONEST, **common),
+                                runs=INVARIANT_RUNS, depth=INVARIANT_DEPTH, **runner)
+    # FR-020: same policy, larger budget — does the discrepancy ACCUMULATE?
+    if not honest.get("error") and honest.get("violation_found"):
+        big = _run_one_invariant(HONEST, harness_src=build_invariant_harness(policy=HONEST, **common),
+                                 runs=INVARIANT_RUNS * INVARIANT_ACCUM_FACTOR,
+                                 depth=INVARIANT_DEPTH, **runner)
+        honest["magnitude_grows"] = accumulates(honest.get("magnitude"), big.get("magnitude"))
+        honest["violation_reproduced"] = bool(big.get("violation_found"))
+        honest["violation_call_set"] = honest.get("call_set", [])
+
+    engine = _run_one_invariant(ADVERSARIAL,
+                                harness_src=build_invariant_harness(policy=ADVERSARIAL, **common),
+                                runs=INVARIANT_RUNS, depth=INVARIANT_DEPTH, **runner)
+    if engine.get("violation_found"):
+        # FR-003: deterministic re-confirmation is a second identical run.
+        again = _run_one_invariant(ADVERSARIAL,
+                                   harness_src=build_invariant_harness(policy=ADVERSARIAL, **common),
+                                   runs=INVARIANT_RUNS, depth=INVARIANT_DEPTH, **runner)
+        engine["counterexample"] = {"call_set": engine.get("call_set", []),
+                                    "reproduced": bool(again.get("violation_found"))}
+
+    # FR-016: attribution is computed from the finding's own mechanism, never asserted by the model.
+    def _touches(call_set):
+        mech = mechanism_signal("\n".join(f"x.{c}();" for c in call_set or []),
+                                task.get("location", ""), task.get("description", ""))
+        # `called` is the subset of the finding's own methods actually invoked. Empty `checked`
+        # means the finding named no method — the signal is BLIND, so it must not assert a match
+        # (safe-erring, FR-016: a mismatch withholds the label, it never asserts a pass).
+        return bool(mech.get("called"))
+
+    outcome, reason, prov = classify_invariant_result(
+        invariant_src=inv, honest_run=honest, engine_result=engine,
+        mechanism_matched=_touches((engine.get("counterexample") or {}).get("call_set")),
+        honest_mechanism_matched=_touches(honest.get("violation_call_set")),
+    )
+    log({"event": "invariant_result", "finding_id": fid, "outcome": outcome, "reason": reason, **prov})
+    return outcome
+
+
 def _process_finding(
     task: dict, *, args, client, sandbox, log,
     symbol_index, file_map: str, protocol_mode: str,
@@ -2545,10 +2648,46 @@ def _process_finding(
         res.path.replace(dest)
         log({"event": "quarantined", "finding_id": fid, "path": str(dest.relative_to(args.project))})
 
+    # Feature 035 T013 (FR-010a) — the invariant path is the route for findings the assertion+fix
+    # oracle CANNOT reach (only 3/23 carry a report fix, and that set is disjoint from the set that
+    # produced a passing exploit). It runs only when opted in, and only for a finding not already
+    # verified by the assertion path — so an already-verified result is never re-litigated and the
+    # expensive engine never runs twice for nothing.
+    done_invariant, calibrating = None, False
+    run_invariant = False
+    if getattr(args, "invariants", False):
+        if outcome != "passed_verified":
+            run_invariant = True                      # FR-010a: the primary route
+        elif task.get("fix") and getattr(args, "invariant_overlap_left", 0) > 0:
+            # FR-010b: a BOUNDED calibration overlap. Only findings that HAVE a report fix carry
+            # independent ground truth, so only they can calibrate the new oracle — and only a few,
+            # because the engine is the expensive mode and must not run across the whole valuable slice.
+            run_invariant = calibrating = True
+            args.invariant_overlap_left -= 1
+    if run_invariant:
+        honest_actions, all_actions = derive_actions(callable_api)
+        if honest_actions:            # no legitimate entrypoints found → the honest side would be
+            done_invariant = _run_invariant_path(   # vacuous, so the path is not run at all
+                task, args=args, client=client, sandbox=sandbox, log=log, scaffold=scaffold,
+                poc_dir=poc_dir, grounding=callable_api, honest_actions=honest_actions,
+                all_actions=all_actions, fork_rpc=fork_rpc)
+        else:
+            log({"event": "invariant_result", "finding_id": fid,
+                 "outcome": "invariant_unavailable", "reason": "no_honest_entrypoints"})
+            done_invariant = "invariant_unavailable"
+        if calibrating:
+            # SC-009: record whether the two oracles AGREE where independent ground truth exists.
+            # A disagreement in the invariant-too-lax direction is what FR-015's threshold judges.
+            log({"event": "oracle_calibration", "finding_id": fid,
+                 "assertion_verdict": outcome, "invariant_verdict": done_invariant,
+                 "agree": (outcome == "passed_verified") == (done_invariant in INVARIANT_TRUSTWORTHY)})
+
     done = {"event": "task_done", "finding_id": fid, "outcome": outcome,
             "elapsed_s": round(time.time() - started, 1)}
     if verify_reason:                     # feature 025: state WHY falsification didn't run
         done["verify_reason"] = verify_reason
+    if done_invariant:                    # feature 035: reported on its OWN axis, never merged
+        done["invariant_outcome"] = done_invariant
     log(done)
     return outcome
 
@@ -2639,6 +2778,11 @@ def main() -> None:
                          "this keeps the honest-experiment behavior (insufficient scaffold, "
                          "no synthesized infra). Synthesis is ON by default (fires only on "
                          "detected insufficiency, always falls back honestly).")
+    ap.add_argument("--invariants", action="store_true",
+                    help="feature 035: after the assertion path, run the PROPERTY/INVARIANT verification "
+                         "path for findings it did not verify (the oracle is the invariant violation, so "
+                         "no report fix is needed). OPT-IN: without this flag the assertion path and its "
+                         "outcomes are byte-unchanged (FR-009).")
     ap.add_argument("--fix-patch", action="append", default=[], metavar="ID=PATH",
                     help="operator-supplied falsification patch for a finding (feature 025): "
                          "a REAL, applyable patch used AS-IS, taking precedence over the report's "
@@ -2659,6 +2803,7 @@ def main() -> None:
     # revert now means the exploit genuinely didn't trigger against real state (there's
     # no "offline, no fork" excuse left), so a real forge PASS is the only honest bar.
     require_pass_effective = args.require_pass or bool(fork_rpc)
+    args.invariant_overlap_left = INVARIANT_OVERLAP_CAP   # FR-010b: bounded calibration overlap
 
     poc_dir = args.project / POC_SUBDIR
     log_file = poc_dir / "_runner_progress.jsonl"
